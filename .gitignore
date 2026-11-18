@@ -1,0 +1,32 @@
+# per-machine settings
+studio.config.local.json
+
+# media and per-run data: never in git
+01_WORKING/01_capture_stream_segments/*
+01_WORKING/02_sources_creator_clips/*
+01_WORKING/03_edit_projects/*/*
+01_WORKING/06_transcripts/*
+02_OUTPUTS/*/*
+00_TRACKER/*
+!**/.gitkeep
+
+*.ts
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.jpg
+*.png
+*.ass
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# os
+.DS_Store
+Thumbs.db
+desktop.ini

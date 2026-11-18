@@ -1,0 +1,348 @@
+<meta name="dash-one-writer">
+<style>
+.gl{display:flex;flex-direction:column;gap:var(--cds-gap-xl)}
+.gl-head h1{font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title);margin:0;text-wrap:balance}
+.gl-head p{margin:var(--cds-gap-xs) 0 0;color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)}
+.gl-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--cds-gap-md)}
+.gl-tile{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-lg);display:flex;flex-direction:column;gap:var(--cds-gap-sm)}
+.gl-lab{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);text-transform:uppercase;letter-spacing:.05em}
+.gl-num{font-family:var(--font-anthropic-serif);font-weight:400;font-size:2.4rem;font-variant-numeric:tabular-nums;line-height:1}
+.gl-h{font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium);margin:0 0 var(--cds-gap-sm)}
+.gl-lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--cds-gap-lg)}
+.gl-lane{display:flex;gap:var(--cds-gap-xs);flex-wrap:wrap;min-height:84px}
+.gl-stage{flex:1 1 72px;min-width:0;border-radius:var(--cds-radius);padding:var(--cds-pad-md);background:var(--color-panel);border:1px solid var(--color-border-line);border-top-width:4px;display:flex;flex-direction:column;gap:4px}
+.gl-stage b{font-family:var(--font-anthropic-serif);font-weight:400;font-size:1.8rem;font-variant-numeric:tabular-nums;line-height:1}
+.gl-stage span{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.gl-chart{position:relative;min-height:220px}
+.gl-chart svg text{fill:var(--cds-text-secondary);font-size:var(--cds-font-size-caption)}
+.gl-tip{position:absolute;pointer-events:none;background:var(--cds-surface-popover);border:1px solid var(--cds-border);box-shadow:var(--cds-shadow-popover);border-radius:var(--cds-radius);padding:var(--cds-pad-sm);font-size:var(--cds-font-size-caption);white-space:nowrap}
+.gl-legend{display:flex;gap:var(--cds-gap-md);flex-wrap:wrap;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);margin-top:var(--cds-gap-sm)}
+.gl-sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.gl-filter{display:flex;gap:var(--cds-gap-xs);flex-wrap:wrap;margin-bottom:var(--cds-gap-sm)}
+.gl-btn{font:inherit;font-size:var(--cds-font-size-caption);padding:4px 12px;border-radius:999px;border:1px solid var(--color-border-line);background:var(--color-bg);color:var(--color-fg);cursor:pointer}
+.gl-btn[aria-pressed="true"]{background:var(--color-fg);color:var(--color-bg);border-color:var(--color-fg)}
+.gl-btn:focus-visible{outline:2px solid var(--color-fg);outline-offset:2px}
+.gl-tablewrap{overflow-x:auto}
+table.gl-feed{width:100%;border-collapse:collapse}
+.gl-feed th{text-align:left;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);font-weight:var(--cds-font-weight-medium);padding:var(--cds-pad-xs) var(--cds-pad-sm);border-bottom:1px solid var(--color-border-line);white-space:nowrap}
+.gl-feed td{padding:var(--cds-pad-sm);border-bottom:1px solid var(--color-border-line);vertical-align:middle}
+.gl-when{color:var(--color-fg-muted);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--cds-font-size-caption)}
+.gl-chip{white-space:nowrap;font-size:var(--cds-font-size-caption)}
+.gl-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:var(--cds-font-size-caption);border:1px solid currentColor;white-space:nowrap}
+.gl-muted{color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)}
+.gl-tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--cds-gap-sm);margin-bottom:var(--cds-gap-md)}
+.gl-tier{font:inherit;text-align:left;cursor:pointer;background:var(--color-panel);border:1px solid var(--color-border-line);border-left-width:4px;border-radius:var(--cds-radius);padding:var(--cds-pad-md);display:flex;flex-direction:column;gap:4px;color:var(--color-fg)}
+.gl-tier[aria-pressed="true"]{outline:2px solid var(--color-fg);outline-offset:1px}
+.gl-tier b{font-family:var(--font-anthropic-serif);font-weight:400;font-size:1.8rem;line-height:1;font-variant-numeric:tabular-nums}
+.gl-tier span{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.gl-bar{display:flex;align-items:center;gap:8px;min-width:140px}
+.gl-bar i{display:block;height:8px;border-radius:4px;background:var(--cds-chart-muted)}
+.gl-bar small{font-variant-numeric:tabular-nums;color:var(--color-fg-muted);white-space:nowrap}
+.gl-feed a{color:inherit;text-underline-offset:3px}
+.gl-plat{display:inline-block;padding:1px 8px;border-radius:4px;font-size:var(--cds-font-size-caption);border:1px solid var(--color-border-line);white-space:nowrap}
+</style>
+
+<div class="gl">
+  <header class="gl-head" id="top">
+    <h1>GTA6 Clip Log</h1>
+    <p>Every clip and every step of the setup, newest first.</p>
+  </header>
+
+  <section class="gl-tiles" id="totals">
+    <div class="gl-tile" id="tile-ready"><span class="gl-lab">Ready to post</span><b class="gl-num" data-draw="t-ready" data-source="summary" data-field="ready" data-row="0">—</b></div>
+    <div class="gl-tile" id="tile-posted"><span class="gl-lab">Posted</span><b class="gl-num" data-draw="t-posted" data-source="summary" data-field="posted" data-row="0">—</b></div>
+    <div class="gl-tile" id="tile-views"><span class="gl-lab">Views on posted clips</span><b class="gl-num" data-draw="t-views" data-source="summary" data-field="views" data-row="0">—</b></div>
+    <div class="gl-tile" id="tile-logged"><span class="gl-lab">Things logged</span><b class="gl-num" data-draw="t-logged" data-source="summary" data-field="logged" data-row="0">—</b></div>
+  </section>
+
+  <section class="gl-lanes" id="boards">
+    <div id="board-clips">
+      <h2 class="gl-h">Clip pipeline</h2>
+      <div class="gl-lane" data-draw="lane-clips" data-source="pipeline"></div>
+    </div>
+    <div id="board-work">
+      <h2 class="gl-h">Setup work</h2>
+      <div class="gl-lane" data-draw="lane-work" data-source="pipeline"></div>
+    </div>
+  </section>
+
+  <section id="activity">
+    <h2 class="gl-h">Activity by day</h2>
+    <div class="gl-chart" data-draw="byday" data-source="items"></div>
+    <div class="gl-legend" data-draw="legend"></div>
+  </section>
+
+  <section id="watch">
+    <h2 class="gl-h">Who to clip</h2>
+    <div class="gl-tiers" data-draw="tiers" data-source="tiers"></div>
+    <div class="gl-tablewrap">
+      <table class="gl-feed" data-source="watch" data-row-key="id">
+        <thead><tr><th data-field="name">Creator</th><th data-field="platform">Where</th><th data-field="viewers">Viewers</th><th data-field="language">Language</th><th data-field="note">Why</th></tr></thead>
+        <tbody data-draw="watchlist"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="feed">
+    <h2 class="gl-h">Log</h2>
+    <div class="gl-filter" role="group" aria-label="Show">
+      <button type="button" class="gl-btn" data-kind="" aria-pressed="true">All</button>
+      <button type="button" class="gl-btn" data-kind="clip" aria-pressed="false">Clips</button>
+      <button type="button" class="gl-btn" data-kind="setup" aria-pressed="false">Setup</button>
+      <button type="button" class="gl-btn" data-kind="tool" aria-pressed="false">Tools</button>
+      <button type="button" class="gl-btn" data-kind="decision" aria-pressed="false">Decisions</button>
+    </div>
+    <div class="gl-tablewrap">
+      <table class="gl-feed" data-source="items" data-row-key="id">
+        <thead><tr><th data-field="when">When</th><th data-field="kind">Type</th><th data-field="title">What</th><th data-field="status">Status</th><th data-field="platform">Platform</th></tr></thead>
+        <tbody data-draw="feed"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+window.GL = {
+  kinds: ['clip', 'setup', 'tool', 'decision'],
+  kindLabel: {clip: 'Clip', setup: 'Setup', tool: 'Tool', decision: 'Decision'},
+  stageLabel: {editing: 'Editing', ready: 'Ready', posted: 'Posted', dropped: 'Dropped', todo: 'To do', 'in-progress': 'Doing', done: 'Done'},
+  tone: function (s) {
+    return ({todo: 'var(--color-fg-muted)', 'in-progress': 'var(--color-warn)', editing: 'var(--color-warn)', done: 'var(--color-ok)', posted: 'var(--color-ok)', ready: dash.colors[0], dropped: 'var(--color-bad)'})[s] || 'var(--color-fg-muted)';
+  },
+  kindColor: function (k) { var i = GL.kinds.indexOf(k); return dash.colors[(i < 0 ? 0 : i) % dash.colors.length]; },
+  filter: ''
+};
+
+dash.calc('summary', {
+  inputs: ['items'],
+  title: 'Totals',
+  description: 'Clips ready and posted, views summed over posted clips, and every entry logged.',
+  fn: function (items) {
+    var clips = items.filter(function (r) { return r.kind === 'clip'; });
+    return [{
+      ready: clips.filter(function (r) { return r.status === 'ready'; }).length,
+      posted: clips.filter(function (r) { return r.status === 'posted'; }).length,
+      views: d3.sum(clips.filter(function (r) { return r.status === 'posted'; }), function (r) { return +r.views || 0; }),
+      logged: items.length
+    }];
+  }
+});
+
+dash.calc('pipeline', {
+  inputs: ['items'],
+  title: 'Board counts',
+  description: 'How many entries sit at each stage: clips in one lane, setup work in the other.',
+  fn: function (items) {
+    var lanes = {clips: ['editing', 'ready', 'posted', 'dropped'], work: ['todo', 'in-progress', 'done']};
+    var out = [];
+    Object.keys(lanes).forEach(function (lane) {
+      lanes[lane].forEach(function (stage) {
+        out.push({lane: lane, stage: stage, n: items.filter(function (r) { return ((lane === 'clips') === (r.kind === 'clip')) && r.status === stage; }).length});
+      });
+    });
+    return out;
+  }
+});
+
+['ready', 'posted', 'views', 'logged'].forEach(function (f) {
+  dash.draw('t-' + f, function (el) {
+    var s = dash.data('summary');
+    el.textContent = s.status === 'ok' && s.data && s.data[0] ? d3.format(',')(s.data[0][f]) : '—';
+  });
+});
+
+function drawLane(lane) {
+  return function (el) {
+    var s = dash.data('pipeline');
+    el.replaceChildren();
+    if (s.status !== 'ok' || !s.data) { el.textContent = s.status === 'error' ? 'Failed to load' : '—'; return; }
+    s.data.filter(function (r) { return r.lane === lane; }).forEach(function (r) {
+      var box = document.createElement('div');
+      box.className = 'gl-stage';
+      box.style.borderTopColor = GL.tone(r.stage);
+      var b = document.createElement('b');
+      b.textContent = r.n;
+      b.setAttribute('data-source', 'pipeline');
+      b.setAttribute('data-field', 'n');
+      b.setAttribute('data-where', 'lane=' + r.lane + '&stage=' + r.stage);
+      var sp = document.createElement('span');
+      sp.textContent = GL.stageLabel[r.stage] || r.stage;
+      box.append(b, sp);
+      el.append(box);
+    });
+  };
+}
+dash.draw('lane-clips', drawLane('clips'));
+dash.draw('lane-work', drawLane('work'));
+
+dash.draw('legend', function (el) {
+  el.replaceChildren();
+  GL.kinds.forEach(function (k) {
+    var s = document.createElement('span');
+    var sw = document.createElement('i');
+    sw.className = 'gl-sw';
+    sw.style.background = GL.kindColor(k);
+    s.append(sw, document.createTextNode(GL.kindLabel[k]));
+    el.append(s);
+  });
+});
+
+dash.draw('byday', function (el) {
+  var s = dash.data('items');
+  el.replaceChildren();
+  if (s.status !== 'ok') { if (s.status === 'error') el.textContent = 'Failed to load'; return; }
+  var rows = s.data.filter(function (r) { return r.when; });
+  var dayFmt = d3.timeFormat('%Y-%m-%d');
+  var last = new Date();
+  rows.forEach(function (r) { var d = new Date(r.when); if (d > last) last = d; });
+  var days = d3.timeDays(d3.timeDay.offset(d3.timeDay.floor(last), -13), d3.timeDay.offset(d3.timeDay.floor(last), 1)).map(dayFmt);
+  var table = days.map(function (day) {
+    var o = {day: day};
+    GL.kinds.forEach(function (k) { o[k] = 0; });
+    rows.forEach(function (r) { if (dayFmt(new Date(r.when)) === day && o[r.kind] !== undefined) o[r.kind]++; });
+    return o;
+  });
+  var stack = d3.stack().keys(GL.kinds)(table);
+  var W = Math.max(280, el.clientWidth), H = 220, m = {t: 8, r: 8, b: 26, l: 28};
+  var x = d3.scaleBand().domain(days).range([m.l, W - m.r]).padding(0.25);
+  var ymax = d3.max(table, function (d) { return d3.sum(GL.kinds, function (k) { return d[k]; }); }) || 1;
+  var y = d3.scaleLinear().domain([0, ymax]).nice().range([H - m.b, m.t]);
+  var svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', '0 0 ' + W + ' ' + H)
+    .attr('role', 'img').attr('aria-label', 'Entries logged per day over the last 14 days, stacked by type');
+  svg.append('g').selectAll('line').data(y.ticks(4)).join('line')
+    .attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).style('stroke', 'var(--cds-chart-grid)');
+  svg.append('g').selectAll('text').data(y.ticks(4)).join('text')
+    .attr('x', m.l - 6).attr('y', y).attr('dy', '0.32em').attr('text-anchor', 'end').text(d3.format('d'));
+  var every = Math.ceil(14 / Math.max(1, Math.floor((W - m.l) / 52)));
+  var lab = d3.timeFormat('%b %e');
+  svg.append('g').selectAll('text').data(days.filter(function (d, i) { return (days.length - 1 - i) % every === 0; })).join('text')
+    .attr('x', function (d) { return x(d) + x.bandwidth() / 2; }).attr('y', H - 8).attr('text-anchor', 'middle')
+    .text(function (d) { return lab(new Date(d + 'T12:00')); });
+  var tip = document.createElement('div');
+  tip.className = 'gl-tip';
+  tip.hidden = true;
+  el.append(tip);
+  stack.forEach(function (layer) {
+    svg.append('g').selectAll('rect').data(layer).join('rect')
+      .attr('x', function (d) { return x(d.data.day); }).attr('width', x.bandwidth())
+      .attr('y', function (d) { return y(d[1]); }).attr('height', function (d) { return Math.max(0, y(d[0]) - y(d[1])); })
+      .attr('rx', 2).style('fill', GL.kindColor(layer.key))
+      .on('pointermove', function (ev, d) {
+        var n = d.data[layer.key];
+        tip.textContent = lab(new Date(d.data.day + 'T12:00')) + ' · ' + n + ' ' + GL.kindLabel[layer.key].toLowerCase() + (n === 1 ? '' : 's');
+        tip.hidden = false;
+        var b = el.getBoundingClientRect();
+        var left = Math.min(ev.clientX - b.left + 12, el.clientWidth - tip.offsetWidth - 4);
+        tip.style.left = Math.max(0, left) + 'px';
+        tip.style.top = Math.max(0, ev.clientY - b.top - 36) + 'px';
+      })
+      .on('pointerleave', function () { tip.hidden = true; });
+  });
+});
+
+dash.draw('feed', function (tb) {
+  var s = dash.data('items');
+  tb.replaceChildren();
+  if (s.status !== 'ok') return;
+  var rows = s.data.filter(function (r) { return !GL.filter || r.kind === GL.filter; })
+    .slice().sort(function (a, b) { return String(b.when).localeCompare(String(a.when)); }).slice(0, 60);
+  var fmt = d3.timeFormat('%b %e, %H:%M');
+  if (!rows.length) {
+    var tr0 = document.createElement('tr');
+    var td0 = document.createElement('td');
+    td0.colSpan = 5;
+    td0.className = 'gl-muted';
+    td0.textContent = 'Nothing logged here yet.';
+    tr0.append(td0);
+    tb.append(tr0);
+    return;
+  }
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    tr.setAttribute('data-key', encodeURIComponent(r.id));
+    var t1 = document.createElement('td'); t1.className = 'gl-when'; t1.textContent = r.when ? fmt(new Date(r.when)) : '—';
+    var t2 = document.createElement('td'); var c = document.createElement('span'); c.className = 'gl-chip';
+    var sw = document.createElement('i'); sw.className = 'gl-sw'; sw.style.background = GL.kindColor(r.kind);
+    c.append(sw, document.createTextNode(GL.kindLabel[r.kind] || r.kind || '—')); t2.append(c);
+    var t3 = document.createElement('td'); t3.textContent = r.title || '—';
+    var t4 = document.createElement('td'); var p = document.createElement('span'); p.className = 'gl-pill';
+    p.style.color = GL.tone(r.status); p.textContent = GL.stageLabel[r.status] || r.status || '—'; t4.append(p);
+    var t5 = document.createElement('td'); t5.className = 'gl-muted'; t5.textContent = r.platform || '';
+    tr.append(t1, t2, t3, t4, t5);
+    tb.append(tr);
+  });
+});
+
+document.querySelectorAll('.gl-btn[data-kind]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    GL.filter = btn.getAttribute('data-kind');
+    document.querySelectorAll('.gl-btn[data-kind]').forEach(function (b) { b.setAttribute('aria-pressed', String(b === btn)); });
+    dash.draw('feed');
+  });
+});
+GL.tierInfo = {A: 'English, live now', B: 'Biggest non-English', C: 'YouTube 24h stream', D: 'Expected, not confirmed'};
+GL.tierTone = {A: 'var(--color-ok)', B: 'var(--color-warn)', C: 'var(--cds-chart-muted)', D: 'var(--color-fg-muted)'};
+GL.tier = 'A';
+
+dash.calc('tiers', {
+  inputs: ['watch'],
+  title: 'Creators per group',
+  description: 'How many creators are in each watchlist group.',
+  fn: function (watch) {
+    return ['A', 'B', 'C', 'D'].map(function (k) { return {tier: k, n: watch.filter(function (r) { return r.tier === k; }).length}; });
+  }
+});
+
+dash.draw('tiers', function (el) {
+  var s = dash.data('tiers');
+  el.replaceChildren();
+  if (s.status !== 'ok' || !s.data) { el.textContent = s.status === 'error' ? 'Failed to load' : '—'; return; }
+  s.data.forEach(function (r) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'gl-tier';
+    b.style.borderLeftColor = GL.tierTone[r.tier];
+    b.setAttribute('aria-pressed', String(GL.tier === r.tier));
+    var n = document.createElement('b');
+    n.textContent = r.n;
+    n.setAttribute('data-source', 'tiers');
+    n.setAttribute('data-field', 'n');
+    n.setAttribute('data-where', 'tier=' + r.tier);
+    var l = document.createElement('span');
+    l.textContent = GL.tierInfo[r.tier];
+    b.append(n, l);
+    b.onclick = function () { GL.tier = r.tier; dash.draw('tiers'); dash.draw('watchlist'); };
+    el.append(b);
+  });
+});
+
+dash.draw('watchlist', function (tb) {
+  var s = dash.data('watch');
+  tb.replaceChildren();
+  if (s.status !== 'ok') return;
+  var rows = s.data.filter(function (r) { return r.tier === GL.tier; })
+    .slice().sort(function (a, b) { return (+b.viewers || 0) - (+a.viewers || 0) || String(a.name).localeCompare(String(b.name)); });
+  var max = d3.max(rows, function (r) { return +r.viewers || 0; }) || 1;
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    tr.setAttribute('data-key', encodeURIComponent(r.id));
+    var t1 = document.createElement('td');
+    var href = String(r.url || '');
+    if (/^https:\/\//.test(href)) {
+      var a = document.createElement('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = r.name; t1.append(a);
+    } else { t1.textContent = r.name; }
+    var t2 = document.createElement('td'); var p = document.createElement('span'); p.className = 'gl-plat'; p.textContent = r.platform || '—'; t2.append(p);
+    var t3 = document.createElement('td');
+    if (r.viewers != null && r.viewers !== '') {
+      var bar = document.createElement('div'); bar.className = 'gl-bar';
+      var i = document.createElement('i'); i.style.width = Math.max(4, 90 * (+r.viewers) / max) + 'px'; i.style.background = GL.tierTone[r.tier];
+      var sm = document.createElement('small'); sm.textContent = d3.format(',')(+r.viewers);
+      bar.append(i, sm); t3.append(bar);
+    } else { t3.className = 'gl-muted'; t3.textContent = '—'; }
+    var t4 = document.createElement('td'); t4.className = 'gl-muted'; t4.textContent = r.language || '';
+    var t5 = document.createElement('td'); t5.className = 'gl-muted'; t5.textContent = r.note || '';
+    tr.append(t1, t2, t3, t4, t5);
+    tb.append(tr);
+  });
+});
+</script>
