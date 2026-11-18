@@ -4,10 +4,17 @@
   "whisper_model": "base.en",
   "captions": "local",
   "record_max_height": 720,
-  "max_parallel_grabs": 3,
+  "max_parallel_grabs": 5,
   "x264_preset": "superfast",
   "threads": null,
-  "fonts": { "display": null, "small": null },
-  "clip_length_seconds": [7, 30],
-  "dashboard_url": null
+  "fonts": {
+    "display": null,
+    "small": null
+  },
+  "clip_length_seconds": [
+    22,
+    45
+  ],
+  "dashboard_url": null,
+  "max_parallel_renders": 2
 }

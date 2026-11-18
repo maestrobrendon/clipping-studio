@@ -34,6 +34,7 @@ Working files and outputs never mix.
   06_transcripts/<date>/               transcripts, review frames, caption files
   07_highlight_finder/                 notes on moment scoring and experiments
   08_notes/                            watchlist, verified facts, takedown log
+  09_qc_failed/<date>/                 clips that failed the automatic quality check (never post)
 02_OUTPUTS/      finished work only
   01_clips_ready_to_post/<date>/       final .mp4 files
   02_thumbnails/                       cover frames
@@ -54,9 +55,12 @@ Never put scratch files in `02_OUTPUTS/`. Never delete a recording or output wit
 |---|---|
 | Check machine | `python tools/clipit.py doctor` |
 | Who is live | `python tools/clipit.py live xqc n3on kaicenat` (Kick) |
-| Record + find moments | `python tools/clipit.py grab kick:xqc kick:n3on twitch:kaicenat --secs 60` |
+| Record + find moments | `python tools/clipit.py grab kick:xqc kick:n3on twitch:kaicenat --secs 200` |
 | Re-scan a recording | `python tools/clipit.py scan 01_WORKING/01_capture_stream_segments/<date>/<file>.ts` |
-| Make the clip | `python tools/clipit.py render <rec_id> --start 12 --end 31 --hook "..." --tag t1` |
+| Make 10 clips at once (normal) | `python tools/clipit.py batch 01_WORKING/06_transcripts/<date>/plan_<time>.json` |
+| Make one clip | `python tools/clipit.py render <rec_id> --start 12 --end 48 --hook "..." --tag t1` |
+
+Every clip is QC-checked (sound and picture start at 0, run the full length, no black opening, no dropout). Only clips that pass reach `02_OUTPUTS/`. Clips run 22 to 45 seconds; a batch is 10 clips.
 
 `grab` prints the top moments per recording with their transcript and three still frames. **Always look at the frames before choosing** (read the .jpg files), because loudness alone also catches cutscenes and ads.
 

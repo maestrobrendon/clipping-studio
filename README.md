@@ -22,8 +22,8 @@ Finished clips land in `02_OUTPUTS/01_clips_ready_to_post/`, with the caption te
 | Python 3.10+ | runs the clip tool | Windows: yes (winget) |
 | ffmpeg (full build) | records and renders | yes |
 | faster-whisper | captions, runs on your own computer | yes |
-| streamlink | Twitch streams | yes |
-| yt-dlp | YouTube streams | yes |
+| streamlink | records every stream (Kick, Twitch, YouTube) without dropping pieces | yes |
+| yt-dlp | downloads finished clips from other creators | yes |
 | A Claude account | the assistant | no, sign in yourself |
 
 No API keys, no paid services. Captions run locally.
@@ -55,7 +55,7 @@ Media never goes into git. Each person's recordings and clips stay on their own 
 
 `python tools/clipit.py doctor` rates your machine and picks settings for it. On an older 2-core laptop:
 - close Chrome stream tabs while clipping
-- record 2 streams at a time
+- record up to 5 streams at a time (recording is network work, not CPU)
 - for the fastest possible pass, set `"captions": "none"` in `studio.config.local.json`
 
 ## Rules everyone follows

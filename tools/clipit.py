@@ -2,14 +2,19 @@
 
   python tools/clipit.py doctor                         check this machine, write its profile
   python tools/clipit.py live   kick xqc n3on ...       who is live right now (Kick)
-  python tools/clipit.py grab   kick:xqc twitch:kaicenat --secs 60
+  python tools/clipit.py grab   kick:xqc twitch:kaicenat --secs 200
                                                         record live streams in parallel, find the best
                                                         moments, save transcript + frames for review
   python tools/clipit.py scan   <recording.ts> ...      find moments in recordings you already have
   python tools/clipit.py render <rec_id> --start S --end E --hook "TEXT" [--tag t1]
-                                                        make the 9:16 captioned clip + post copy
+                                                        make one 9:16 captioned clip + post copy, then QC it
+  python tools/clipit.py batch  plan.json               render many clips at once (the normal way), QC each,
+                                                        print one table. plan = [{"rid","start","end","hook","tag"}]
 
-Sources: kick:<slug> (default if no prefix), twitch:<login> (needs streamlink), yt:<@handle or url> (needs yt-dlp)
+Every clip is quality-checked (picture and sound both start at 0 and run the full length, no black
+opening, no dead audio). Failures go to 01_WORKING/09_qc_failed/, never to the outputs folder.
+
+Sources: kick:<slug> (default if no prefix), twitch:<login>, yt:<@handle or url>. Recording uses streamlink.
 
 Where files go (never mix working files and outputs):
   recordings  01_WORKING/01_capture_stream_segments/<date>/
@@ -18,7 +23,7 @@ Where files go (never mix working files and outputs):
   post copy   02_OUTPUTS/03_post_copy/<date>/
   log         00_TRACKER/clip_log.csv
 """
-import argparse, csv, json, os, platform, re, shutil, subprocess, sys, time, urllib.parse, urllib.request
+import argparse, csv, json, os, platform, re, shutil, subprocess, sys, threading, time, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,8 +39,10 @@ CAP = ROOT / "01_WORKING" / "01_capture_stream_segments" / TODAY
 TRN = ROOT / "01_WORKING" / "06_transcripts" / TODAY
 OUT = ROOT / "02_OUTPUTS" / "01_clips_ready_to_post" / TODAY
 COPY = ROOT / "02_OUTPUTS" / "03_post_copy" / TODAY
+QCF = ROOT / "01_WORKING" / "09_qc_failed" / TODAY
 LOG = ROOT / "00_TRACKER" / "clip_log.csv"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
+LOCK = threading.Lock()                                   # one transcription / meta write at a time
 HYPE = re.compile(r"\b(bro+|yo+|what+|no+ way|oh my god|omg|wtf|let'?s go+|chat|hell no|holy|insane|crazy|dude|wait|look)\b", re.I)
 
 
@@ -98,29 +105,33 @@ def kick_live(slug):
             "name": (j.get("user") or {}).get("username", slug), "page": f"https://kick.com/{slug}"}
 
 
+QUALITY = "720p60,720p,720p30,480p,best"
+
+
+def streamlink_live(page):
+    """True if streamlink sees a live stream at this page (Twitch, YouTube)."""
+    r = run(["streamlink", "--json", page], capture_output=True, text=True, timeout=90)
+    try:
+        return bool(json.loads(r.stdout or "{}").get("streams"))
+    except Exception:
+        return False
+
+
 def twitch_live(login):
-    if not shutil.which("streamlink"):
-        raise RuntimeError("Twitch needs streamlink: pip install streamlink")
-    r = run(["streamlink", "--stream-url", f"https://www.twitch.tv/{login}", "720p60,720p,480p,best"],
-            capture_output=True, text=True, timeout=60)
-    url = r.stdout.strip()
-    if r.returncode or not url.startswith("http"):
+    page = f"https://www.twitch.tv/{login}"
+    if not streamlink_live(page):
         return None
-    return {"platform": "twitch", "slug": login, "url": url, "title": "", "viewers": None, "name": login,
-            "page": f"https://www.twitch.tv/{login}"}
+    return {"platform": "twitch", "slug": login, "url": page, "quality": QUALITY, "title": "", "viewers": None,
+            "name": login, "page": page}
 
 
 def youtube_live(handle):
-    if not shutil.which("yt-dlp"):
-        raise RuntimeError("YouTube needs yt-dlp: pip install yt-dlp")
     page = handle if handle.startswith("http") else f"https://www.youtube.com/{handle}/live"
-    r = run(["yt-dlp", "-g", "-f", "best[height<=720]/best", page], capture_output=True, text=True, timeout=90)
-    url = (r.stdout.strip().splitlines() or [""])[0]
-    if r.returncode or not url.startswith("http"):
+    if not streamlink_live(page):
         return None
     slug = re.sub(r"[^A-Za-z0-9_-]", "", handle.split("/")[-2] if handle.startswith("http") else handle)
-    return {"platform": "youtube", "slug": slug or "youtube", "url": url, "title": "", "viewers": None,
-            "name": handle, "page": page}
+    return {"platform": "youtube", "slug": slug or "youtube", "url": page, "quality": QUALITY, "title": "",
+            "viewers": None, "name": handle, "page": page}
 
 
 def resolve(src):
@@ -143,24 +154,47 @@ def pick_variant(master_url):
 
 
 def record(info, secs):
+    """Record with streamlink: it downloads stream pieces in parallel and retries, so nothing goes missing.
+    (ffmpeg's own HLS reader fell behind and lost 30-40% of every recording: black frames, dead audio.)"""
+    if not shutil.which("streamlink"):
+        raise RuntimeError("recording needs streamlink: pip install -r requirements.txt")
     rid = f"{info['slug']}_{datetime.now().strftime('%H%M%S')}"
     path = CAP / f"{rid}.ts"
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-rw_timeout", "15000000", "-i", info["url"],
-           "-t", str(secs), "-c", "copy", str(path)]
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    url = info["url"] if info.get("quality") else "hls://" + info["url"]
+    cmd = ["streamlink", "--stream-segment-threads", "3", "--hls-live-edge", "6", "--stream-timeout", "30",
+           "--stream-segmented-duration", str(secs), "--loglevel", "error", "-f", "-o", str(path),
+           url, info.get("quality", "best")]
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
-        p.wait(timeout=secs + 30)
+        p.wait(timeout=secs + 90)
     except subprocess.TimeoutExpired:            # hard stop: keep whatever arrived
-        try:
-            p.communicate(b"q", timeout=10)
-        except Exception:
-            p.kill()
+        p.kill()
     if not path.exists() or path.stat().st_size < 100_000:
+        print(f"[fail] {rid}: {(p.stderr.read() or b'').decode(errors='replace')[-300:]}")
         return None
     meta = dict(info, rid=rid, file=str(path), recorded_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     meta.pop("url", None)                         # playback URLs carry short-lived tokens; don't keep them
+    meta["holes"] = holes(str(path))
+    if meta["holes"]:
+        print(f"[warn] {rid}: {len(meta['holes'])} gap(s) in the recording, clips will avoid them: {meta['holes']}")
     (TRN / f"{rid}.meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     return meta
+
+
+def holes(path, min_gap=0.5):
+    """Missing stretches in a recording, in seconds from its start. Clips must never cross one."""
+    def times(sel):
+        out = run(["ffprobe", "-v", "error", "-select_streams", sel, "-show_entries", "packet=pts_time",
+                   "-of", "csv=p=0", path], capture_output=True, text=True).stdout.split()
+        return [float(x.strip(",")) for x in out if x.strip(",") not in ("", "N/A")]
+    found = []
+    vt, at = times("v:0"), times("a:0")
+    t0 = min([x[0] for x in (vt, at) if x] or [0])
+    for ts in (sorted(vt), sorted(at)):
+        found += [(round(a - t0, 2), round(b - t0, 2)) for a, b in zip(ts, ts[1:]) if b - a > min_gap]
+    if not vt or not at:
+        found.append((0.0, 1e9))                 # no video or no audio at all: nothing here is usable
+    return sorted(set(found))
 
 
 # ---------- analysis ----------
@@ -205,9 +239,26 @@ def transcribe(path, start=0.0, dur=None):
             for s in segs for w in (s.words or [])]
 
 
-def best_windows(db, hop, words, length=(12, 28), k=3):
+def clip_length():
+    lo, hi = CFG.get("clip_length_seconds", [22, 45])
+    return int(lo), int(hi)
+
+
+def snap(s, e, words, dur):
+    """Start a beat before the first word, end after the last word finishes: no clipped speech."""
+    for w in words:
+        if w["s"] < s < w["e"]:
+            s = w["s"]
+        if w["s"] < e < w["e"] + 0.4:
+            e = w["e"] + 0.4
+    return max(0.0, round(s - 0.4, 2)), min(dur, round(e + 0.6, 2))
+
+
+def best_windows(db, hop, words, length=None, k=None, bad=()):
     import numpy as np
+    length = length or clip_length()
     dur = len(db) * hop
+    k = k or max(2, min(5, int(dur // 50)))
     med = float(np.median(db))
     score = np.clip(db - (med + 8), 0, None)                       # shouting, laughing, explosions
     for w in words:
@@ -219,14 +270,19 @@ def best_windows(db, hop, words, length=(12, 28), k=3):
         n = int(L / hop)
         if n >= len(score):
             continue
-        c = np.convolve(score, np.ones(n), "valid") / np.sqrt(L)    # dense moments beat long ones
-        for i in np.argsort(c)[::-1][:40]:
+        c = np.convolve(score, np.ones(n), "valid") / L ** 0.35     # dense moments win, but longer is fine
+        for i in range(0, len(c), max(1, int(1 / hop))):             # every start second, so moments spread out
             cands.append((float(c[i]), t[i], t[i] + L))
+    if not cands and dur >= 8:                                        # short recording: offer the whole thing
+        cands = [(0.0, 0.0, dur - 1)]
     cands.sort(reverse=True)
     picked = []
     for sc, s, e in cands:
+        s, e = snap(s, e, words, dur)
+        if any(s < he + 0.5 and e > hs - 0.5 for hs, he in bad):      # never cross a hole in the recording
+            continue
         if all(e <= ps or s >= pe for _, ps, pe in picked):
-            picked.append((round(sc, 1), max(0, round(s - 0.5, 2)), min(dur, round(e + 1.0, 2))))
+            picked.append((round(sc, 1), s, e))
         if len(picked) == k:
             break
     return picked
@@ -243,17 +299,21 @@ def frames(path, tag, times):
 
 
 def analyse(meta):
+    if "holes" not in meta:
+        meta["holes"] = holes(meta["file"])
+    bad = meta["holes"]
     db, hop = loudness(meta["file"])
+    k = max(2, min(5, int(len(db) * hop // 50)))
     words, done = [], []
-    for _, s, e in best_windows(db, hop, [], k=3):     # pass 1: loudness finds hot spots
+    for _, s, e in best_windows(db, hop, [], k=k + 1, bad=bad):   # pass 1: loudness finds hot spots
         s, e = max(0, s - 1), e + 1
         if any(s < de and e > ds for ds, de in done):
             continue
         done.append((s, e))
         words += transcribe(meta["file"], s, e - s)     # pass 2: transcribe only the hot spots
     words.sort(key=lambda w: w["s"])
-    meta["words"], meta["windows"] = words, []
-    for sc, s, e in best_windows(db, hop, words):
+    meta["words"], meta["windows"], meta["transcribed"] = words, [], done
+    for sc, s, e in best_windows(db, hop, words, k=k, bad=bad):
         text = " ".join(w["w"] for w in words if s <= w["s"] <= e)
         meta["windows"].append({"score": sc, "start": s, "end": e, "text": text,
                                 "frames": frames(meta["file"], f"{meta['rid']}_{int(s)}", [s + 1, (s + e) / 2, e - 1])})
@@ -321,33 +381,133 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     Path(path).write_text(hdr + "\n".join(ev) + "\n", encoding="utf-8")
 
 
-def render(rid, start, end, hook, tag=None):
-    meta = json.loads((TRN / f"{rid}.json").read_text(encoding="utf-8"))
+def covered(spans, s, e):
+    return any(a <= s + 0.5 and b >= e - 0.5 for a, b in spans)
+
+
+def render(rid, start, end, hook, tag=None, force=False):
+    """Render one clip, then QC it. A clip that fails QC goes to 01_WORKING/09_qc_failed, never to outputs."""
+    mpath = TRN / f"{rid}.json"
+    meta = json.loads(mpath.read_text(encoding="utf-8"))
+    if "holes" not in meta:
+        meta["holes"] = holes(meta["file"])
+    cross = [h for h in meta["holes"] if start < h[1] and end > h[0]]
+    if cross and not force:
+        raise SystemExit(f"{rid} {start}-{end}s crosses a gap in the recording {cross}. Pick another window.")
+    if CFG.get("captions", "local") != "none" and not covered(meta.get("transcribed", []), start, end):
+        with LOCK:                                                   # captions for every second of the clip
+            meta = json.loads(mpath.read_text(encoding="utf-8"))
+            meta.setdefault("holes", [])
+            if not covered(meta.get("transcribed", []), start, end):
+                new = transcribe(meta["file"], start, end - start)
+                meta["words"] = sorted([w for w in meta["words"] if not start <= w["s"] < end] + new, key=lambda w: w["s"])
+                meta.setdefault("transcribed", []).append((start, end))
+                mpath.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+    fdur = float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", meta["file"]],
+                     capture_output=True, text=True).stdout.strip() or end)
+    start, end = snap(start, end, meta["words"], fdur)               # never cut someone off mid-word
     name = f"{rid}_{tag or int(start)}"
     ass = TRN / f"{name}.ass"
     plat = meta.get("platform", "kick")
     page = meta.get("page") or f"https://kick.com/{meta['slug']}"
     credit = f"Clip: {page.replace('https://', '').replace('www.', '')}"
     build_ass(meta["words"], start, end, hook, credit, ass)
-    out = OUT / f"{name}.mp4"
-    vf = ("[0:v]fps=30,split[a][b];"
+    dur = round(end - start, 3)
+    tmp = TRN / f"{name}.render.mp4"
+    # setpts/asetpts: both tracks start at exactly 0 (no black or silent opening)
+    # aresample async + apad + -t: audio covers the whole clip, never shorter than the picture
+    vf = ("[0:v]setpts=PTS-STARTPTS,fps=30,split[a][b];"
           "[a]scale=216:384:force_original_aspect_ratio=increase,crop=216:384,boxblur=6:1,eq=brightness=-0.12,scale=1080:1920[bg];"
           "[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2-60[v];"
-          f"[v]ass={ass.name}[out]")
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start), "-t", str(end - start), "-i", meta["file"],
-           "-filter_complex", vf, "-map", "[out]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+          f"[v]ass={ass.name}[vout];"
+          "[0:a:0]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11,"
+          "aresample=48000,apad[aout]")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-fflags", "+discardcorrupt",
+           "-ss", str(start), "-t", str(dur + 0.5), "-i", meta["file"],
+           "-filter_complex", vf, "-map", "[vout]", "-map", "[aout]", "-t", str(dur),
            "-c:v", "libx264", "-preset", CFG.get("x264_preset", "superfast"), "-crf", "22", "-pix_fmt", "yuv420p",
-           "-threads", str(THREADS), "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", str(out)]
+           "-r", "30", "-threads", str(THREADS), "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+           "-movflags", "+faststart", str(tmp)]
     t0 = time.time()
     run(cmd, check=True, cwd=str(TRN))
+    problems = qc(str(tmp), dur)
+    fails = [p for p in problems if p.startswith("FAIL")]
+    dest_dir = QCF if fails else OUT
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    out = dest_dir / f"{name}.mp4"
+    os.replace(tmp, out)
     said = " ".join(w["w"] for w in meta["words"] if start <= w["s"] < end)
-    (COPY / f"{name}.txt").write_text(
-        f"{hook}\n\nClip: @{meta.get('name', meta['slug'])} on {plat.title()} ({page})\n\n"
-        f"#gta6 #gtavi #gta6gameplay #{re.sub(r'[^A-Za-z0-9]', '', meta['slug'])}\n\n"
-        f"---\nsource: {meta['file']}\nwindow: {start}-{end}s\nsaid: {said}\n", encoding="utf-8")
-    log_row(kind="clip", status="ready", creator=meta.get("name", meta["slug"]), platform=plat, title=hook,
-            file=str(out.relative_to(ROOT)), note=f"{start}-{end}s of {rid}")
-    return str(out), round(time.time() - t0, 1)
+    if not fails:
+        (COPY / f"{name}.txt").write_text(
+            f"{hook}\n\nClip: @{meta.get('name', meta['slug'])} on {plat.title()} ({page})\n\n"
+            f"#gta6 #gtavi #gta6gameplay #{re.sub(r'[^A-Za-z0-9]', '', meta['slug'])}\n\n"
+            f"---\nsource: {meta['file']}\nwindow: {start}-{end}s ({dur:.0f}s)\nqc: {'; '.join(problems) or 'clean'}\n"
+            f"said: {said}\n", encoding="utf-8")
+    log_row(kind="clip", status="qc_failed" if fails else "ready", creator=meta.get("name", meta["slug"]),
+            platform=plat, title=hook, file=str(out.relative_to(ROOT)),
+            note=f"{start}-{end}s of {rid}; qc: {'; '.join(problems) or 'clean'}")
+    return {"clip": name, "file": str(out), "secs": round(time.time() - t0, 1), "len": dur,
+            "ok": not fails, "qc": problems, "hook": hook}
+
+
+# ---------- quality check ----------
+def qc(path, dur):
+    """Every clip is checked before it counts. FAIL = never post. WARN = watch it once."""
+    p = []
+    info = json.loads(run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,start_time,duration",
+                           "-of", "json", path], capture_output=True, text=True).stdout or "{}")
+    st = {s["codec_type"]: s for s in info.get("streams", [])}
+    for kind in ("video", "audio"):
+        s = st.get(kind)
+        if not s:
+            p.append(f"FAIL no {kind}")
+            continue
+        if float(s.get("start_time") or 0) > 0.1:
+            p.append(f"FAIL {kind} starts late ({float(s['start_time']):.1f}s)")
+        if abs(float(s.get("duration") or 0) - dur) > 0.35:
+            p.append(f"FAIL {kind} is {float(s.get('duration') or 0):.1f}s, clip is {dur:.1f}s")
+    if p:
+        return p
+    # one cheap decode pass: black opening, frozen picture, dead audio
+    log = run(["ffmpeg", "-hide_banner", "-nostats", "-i", path, "-vf",
+               "fps=10,scale=180:320,blackdetect=d=0.2:pic_th=0.90:pix_th=0.08,freezedetect=n=0.002:d=2.5",
+               "-af", "silencedetect=noise=-50dB:d=2", "-f", "null", "-"],
+              capture_output=True, text=True).stderr
+    for m in re.finditer(r"black_start:([\d.]+) black_end:([\d.]+)", log):
+        a, b = float(m.group(1)), float(m.group(2))
+        p.append(f"FAIL black {a:.1f}-{b:.1f}s" if a < 0.5 or b - a > 1 else f"WARN black flash {a:.1f}s")
+    for m in re.finditer(r"freeze_duration: ([\d.]+)", log):
+        p.append(f"WARN picture still for {float(m.group(1)):.1f}s (menu or loading?)")
+    for m in re.finditer(r"silence_duration: ([\d.]+)", log):
+        d = float(m.group(1))
+        p.append(f"FAIL silent for {d:.1f}s" if d >= 3 else f"WARN quiet {d:.1f}s")
+    return p
+
+
+def batch(plan_path):
+    """Render a list of clips from a plan file, a few at a time, and print one table."""
+    plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    n = max(1, int(CFG.get("max_parallel_renders", 2)))
+    print(f"rendering {len(plan)} clips, {n} at a time ...", flush=True)
+    def one(c):
+        try:
+            return render(c["rid"], float(c["start"]), float(c["end"]), c["hook"], c.get("tag"))
+        except SystemExit as e:
+            return {"clip": f"{c['rid']}_{c.get('tag', '')}", "ok": False, "qc": [f"FAIL {e}"], "hook": c["hook"], "len": 0, "secs": 0}
+        except Exception as e:
+            return {"clip": f"{c['rid']}_{c.get('tag', '')}", "ok": False, "qc": [f"FAIL render error: {e}"], "hook": c["hook"], "len": 0, "secs": 0}
+    t0 = time.time()
+    with ThreadPoolExecutor(n) as ex:
+        res = list(ex.map(one, plan))
+    good = sum(r["ok"] for r in res)
+    print(f"\n{good}/{len(res)} clips passed QC in {round(time.time() - t0)}s\n")
+    print(f"{'clip':<34} {'len':>4}  {'QC':<6} hook")
+    for r in res:
+        print(f"{r['clip']:<34} {r['len']:>4.0f}  {'ok' if r['ok'] else 'FAILED':<6} {r['hook'][:60]}")
+        for q in r["qc"]:
+            print(f"{'':<42}{q}")
+    (TRN / f"batch_{datetime.now().strftime('%H%M%S')}.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
+    return res
 
 
 # ---------- doctor ----------
@@ -369,8 +529,7 @@ def doctor():
             __import__(mod); line(f"python package {mod}", True)
         except Exception:
             line(f"python package {mod}", False, "pip install -r requirements.txt")
-    for tool, why in (("streamlink", "Twitch"), ("yt-dlp", "YouTube")):
-        print(f"  [{'ok' if shutil.which(tool) else '--'}] {tool} (optional, for {why})")
+    line("streamlink (records every stream)", bool(shutil.which("streamlink")), "" if shutil.which("streamlink") else "pip install -r requirements.txt")
     cores = os.cpu_count() or 1
     ram = None
     try:
@@ -385,9 +544,10 @@ def doctor():
     except Exception:
         pass
     tier = "low" if cores <= 4 or (ram and ram < 12) else ("high" if cores >= 12 else "mid")
-    prof = {"low": {"whisper_model": "base.en", "max_parallel_grabs": 2, "x264_preset": "ultrafast"},
-            "mid": {"whisper_model": "small.en", "max_parallel_grabs": 4, "x264_preset": "superfast"},
-            "high": {"whisper_model": "small.en", "max_parallel_grabs": 8, "x264_preset": "veryfast"}}[tier]
+    # recording is network work (streamlink), so even a slow laptop can record 5 at once
+    prof = {"low": {"whisper_model": "base.en", "max_parallel_grabs": 5, "max_parallel_renders": 2, "x264_preset": "ultrafast"},
+            "mid": {"whisper_model": "small.en", "max_parallel_grabs": 6, "max_parallel_renders": 3, "x264_preset": "superfast"},
+            "high": {"whisper_model": "small.en", "max_parallel_grabs": 8, "max_parallel_renders": 4, "x264_preset": "veryfast"}}[tier]
     prof["threads"] = cores
     print(f"  CPU threads: {cores}   RAM: {round(ram, 1) if ram else '?'} GB   -> machine tier: {tier}")
     (ROOT / "studio.config.local.json").write_text(json.dumps(prof, indent=2), encoding="utf-8")
@@ -405,6 +565,8 @@ def main():
     sc = sub.add_parser("scan"); sc.add_argument("files", nargs="+")
     r = sub.add_parser("render"); r.add_argument("rid"); r.add_argument("--start", type=float, required=True)
     r.add_argument("--end", type=float, required=True); r.add_argument("--hook", required=True); r.add_argument("--tag")
+    r.add_argument("--force", action="store_true", help="render even across a gap in the recording")
+    b = sub.add_parser("batch"); b.add_argument("plan", help='JSON list of {"rid","start","end","hook","tag"}')
     a = ap.parse_args()
 
     if a.cmd == "doctor":
@@ -447,9 +609,13 @@ def main():
                         {"platform": "kick", "slug": rid.rsplit("_", 1)[0], "name": rid.rsplit("_", 1)[0],
                          "title": "", "viewers": None, "rid": rid, "file": str(f)})
         report(recs)
+    elif a.cmd == "batch":
+        batch(a.plan)
     else:
-        out, secs = render(a.rid, a.start, a.end, a.hook, a.tag)
-        print(f"rendered {out} in {secs}s")
+        r = render(a.rid, a.start, a.end, a.hook, a.tag, a.force)
+        print(f"{'ready' if r['ok'] else 'QC FAILED'}: {r['file']} ({r['len']:.0f}s clip, {r['secs']}s to render)")
+        for q in r["qc"]:
+            print(f"  {q}")
 
 
 if __name__ == "__main__":

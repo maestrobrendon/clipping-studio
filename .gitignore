@@ -6,6 +6,7 @@ studio.config.local.json
 01_WORKING/02_sources_creator_clips/*
 01_WORKING/03_edit_projects/*/*
 01_WORKING/06_transcripts/*
+01_WORKING/09_qc_failed/*
 02_OUTPUTS/*/*
 00_TRACKER/*
 !**/.gitkeep
