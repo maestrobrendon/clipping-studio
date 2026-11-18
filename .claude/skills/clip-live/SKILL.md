@@ -24,15 +24,17 @@ python tools/clipit.py grab kick:xqc kick:theburntpeanut kick:lordkebun kick:ram
 
 Run it in the background. While it runs, write hook ideas from the stream titles. Recording uses streamlink, which does not drop pieces of the stream. If it ever prints `[warn] ... gap(s)`, the clips automatically avoid those gaps.
 
-For each recording it prints its candidate windows (22 to 45 seconds): score, start-end seconds, transcript, and 3 frame paths.
+For each recording it prints a **review sheet** path and its candidate windows (22 to 45 seconds): score, start-end seconds, transcript. The review sheet (`<rec_id>_sheet.jpg`) is one image with a row of 3 frames per window, labelled with its time.
 
 ## 3. Choose (this is the judgment step)
 
-For each window, read its 3 frames (they are .jpg files you can view) and the transcript. Keep a window only if:
+Read each recording's review sheet (one image per recording, not one per frame) and the transcripts. Keep a window only if:
 
 - something happens: a reaction, chaos, a fail, a funny line, a useful tip
 - it is not an ad, a loading screen, a menu or a long story cutscene
 - nothing in it spoils the story, has nudity or could get the account struck
+
+Expect about 40% of windows to be usable: streamers sit in cutscenes, menus and giveaway shout-outs. For N clips, record enough for 2.5 x N windows (each 5-minute recording gives 5). If a batch comes up short, record 2 or 3 more streams while the good ones render, rather than padding with weak clips.
 
 You may trim start and end, but keep clips **22 to 45 seconds** (the person wants them long enough to land). Windows are already cut on word boundaries, so prefer the given times. Never stretch a window across a gap. Drop weak windows. If fewer than 10 are good, say so; don't pad.
 

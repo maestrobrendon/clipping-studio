@@ -288,12 +288,21 @@ def best_windows(db, hop, words, length=None, k=None, bad=()):
     return picked
 
 
+_dur = {}
+def last_t(path):
+    if path not in _dur:
+        _dur[path] = float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                               capture_output=True, text=True).stdout.strip() or 1e9)
+    return _dur[path]
+
+
 def frames(path, tag, times):
     outs = []
+    times = [min(tt, max(0, last_t(path) - 2)) for tt in times]   # the last second of a recording can be cut mid-frame
     for i, tt in enumerate(times):
         p = TRN / f"{tag}_f{i}.jpg"
         run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(max(0, tt)), "-i", path,
-             "-frames:v", "1", "-vf", "scale=640:-2", str(p)])
+             "-frames:v", "1", "-vf", "scale=640:-2:out_range=full,format=yuvj420p", "-q:v", "3", str(p)])
         outs.append(str(p))
     return outs
 
@@ -321,14 +330,36 @@ def analyse(meta):
     return meta
 
 
+def contact_sheet(meta):
+    """One image per recording: a row of 3 frames for each candidate window, labelled with its time.
+    Review this instead of opening every frame."""
+    if not meta.get("windows"):
+        return None
+    inputs, fc, rows, k = [], [], [], 0
+    for r, w in enumerate(meta["windows"]):
+        for f in w["frames"][:3]:
+            inputs += ["-i", f] if Path(f).exists() else ["-f", "lavfi", "-i", "color=gray:s=640x360"]
+            fc.append(f"[{k}:v]scale=400:225,setsar=1,format=yuv420p[c{k}]")
+            k += 1
+        fc.append(f"[c{k-3}][c{k-2}][c{k-1}]hstack=3,drawbox=x=0:y=0:w=170:h=34:color=black@0.8:t=fill,"
+                  f"drawtext=text='{int(w['start'])}-{int(w['end'])}s':x=6:y=6:fontsize=24:fontcolor=yellow[r{r}]")
+        rows.append(f"[r{r}]")
+    fc.append(f"{''.join(rows)}vstack={len(rows)}[out]" if len(rows) > 1 else f"{rows[0]}null[out]")
+    out = TRN / f"{meta['rid']}_sheet.jpg"
+    run(["ffmpeg", "-v", "quiet", "-y", *inputs, "-filter_complex", ";".join(fc), "-map", "[out]",
+         "-frames:v", "1", "-q:v", "4", str(out)], stderr=subprocess.DEVNULL)
+    return str(out) if out.exists() else None
+
+
 def report(recs):
     for m in recs:
         t0 = time.time()
         m = analyse(m)
+        sheet = contact_sheet(m)
         print(f"\n=== {m['rid']}  [{m.get('platform', 'kick')}]  viewers={m.get('viewers')}  ({round(time.time() - t0)}s)  {m.get('title', '')[:60]}")
+        print(f"  review sheet: {sheet}")
         for w in m["windows"]:
             print(f"  score {w['score']:>6}  {w['start']:6.1f}-{w['end']:6.1f}s  | {w['text'][:220]}")
-            print(f"    frames: {' | '.join(w['frames'])}")
 
 
 # ---------- render ----------
@@ -388,6 +419,11 @@ def covered(spans, s, e):
 def render(rid, start, end, hook, tag=None, force=False):
     """Render one clip, then QC it. A clip that fails QC goes to 01_WORKING/09_qc_failed, never to outputs."""
     mpath = TRN / f"{rid}.json"
+    if not mpath.exists():                       # recorded before midnight: look in earlier days
+        found = sorted(TRN.parent.glob(f"*/{rid}.json"))
+        if not found:
+            raise SystemExit(f"no analysis found for {rid}; run grab or scan first")
+        mpath = found[-1]
     meta = json.loads(mpath.read_text(encoding="utf-8"))
     if "holes" not in meta:
         meta["holes"] = holes(meta["file"])
