@@ -60,7 +60,7 @@ Never put scratch files in `02_OUTPUTS/`. Never delete a recording or output wit
 | Make 10 clips at once (normal) | `python tools/clipit.py batch 01_WORKING/06_transcripts/<date>/plan_<time>.json` |
 | Make one clip | `python tools/clipit.py render <rec_id> --start 12 --end 48 --hook "..." --tag t1` |
 
-Every clip is QC-checked (sound and picture start at 0, run the full length, no black opening, no dropout). Only clips that pass reach `02_OUTPUTS/`. Clips run 22 to 45 seconds; a batch is 10 clips.
+Every clip is QC-checked (sound and picture start at 0, run the full length, no black opening, no dropout, lip sync within 0.1s). Always read the QC result of every clip before calling it ready; "passed" is not the same as reviewed. Only clips that pass reach `02_OUTPUTS/`. Clips run 22 to 45 seconds; a batch is 10 clips.
 
 `grab` prints the top moments per recording with their transcript and three still frames. **Always look at the frames before choosing** (read the .jpg files), because loudness alone also catches cutscenes and ads.
 

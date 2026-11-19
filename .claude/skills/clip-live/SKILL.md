@@ -75,6 +75,7 @@ A clip that fails QC goes to `01_WORKING/09_qc_failed/<date>/` and is logged as 
 | Picture and sound both run the full clip length | sound cuts out or picture stops early |
 | No black frames at the start, no long black stretch | dead opening |
 | No silence of 3s or more | audio dropout |
+| Lip sync: sound and picture lined up against the source separately | off by 0.1s or more = FAIL. "not measurable" = WARN: tell the person to watch it once |
 | Picture frozen 2.5s+ | WARN only (could be a menu or loading screen); look at that clip |
 
 Also look at one frame per clip (`ffmpeg -ss 5 -i clip.mp4 -frames:v 1 -vf scale=540:-2 check.jpg` into your scratch folder, not into `02_OUTPUTS`): hook readable, captions not covering the facecam, credit visible.

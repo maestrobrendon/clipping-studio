@@ -14,6 +14,7 @@ Settled decisions. Don't reopen them unless the person asks. Add new ones at the
 | 2026-11-18 | Kick is the easiest source (public API + direct stream). Twitch needs streamlink, YouTube needs yt-dlp. | Tested Kick end to end; Twitch and YouTube paths are written but untested. |
 | 2026-11-18 | Record with streamlink, not ffmpeg's HLS reader. 5 streams at once is fine. | ffmpeg lost 30-40% of every recording (2-10s holes), which caused black openings, frozen picture and dead audio in the first clips. streamlink lost 0s on 3 streams at once. |
 | 2026-11-18 | Every clip is QC-checked automatically; failures go to `01_WORKING/09_qc_failed/`, never to outputs. | The person posts 20 a day and can't watch each one for glitches. |
+| 2026-11-19 | Render seeks 3s early and cuts sound and picture at the same timestamp; QC measures lip sync on every clip (fail at 0.1s). | Most clips had the picture 0.8-1.8s off the sound: resetting each track to its own first frame after a seek shifted the picture by up to a keyframe gap. Found by the person, not by QC. |
 | 2026-11-18 | Clips are 22 to 45 seconds. Batches of 10 through `clipit.py batch`. | The person found the first clips (14 to 31s) too short; target is 20 clips a day. |
 | 2026-11-18 | Local log is `00_TRACKER/clip_log.csv`; the visual log page reads from its own store. | The CSV works on any machine; the page is per Claude account. |
 

@@ -416,7 +416,7 @@ def covered(spans, s, e):
     return any(a <= s + 0.5 and b >= e - 0.5 for a, b in spans)
 
 
-def render(rid, start, end, hook, tag=None, force=False):
+def render(rid, start, end, hook, tag=None, force=False, day=None, spoiler=False, exact=False):
     """Render one clip, then QC it. A clip that fails QC goes to 01_WORKING/09_qc_failed, never to outputs."""
     mpath = TRN / f"{rid}.json"
     if not mpath.exists():                       # recorded before midnight: look in earlier days
@@ -441,7 +441,8 @@ def render(rid, start, end, hook, tag=None, force=False):
                 mpath.write_text(json.dumps(meta, indent=1), encoding="utf-8")
     fdur = float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", meta["file"]],
                      capture_output=True, text=True).stdout.strip() or end)
-    start, end = snap(start, end, meta["words"], fdur)               # never cut someone off mid-word
+    if not exact:                                                    # exact: times already final (re-render)
+        start, end = snap(start, end, meta["words"], fdur)           # never cut someone off mid-word
     name = f"{rid}_{tag or int(start)}"
     ass = TRN / f"{name}.ass"
     plat = meta.get("platform", "kick")
@@ -450,16 +451,20 @@ def render(rid, start, end, hook, tag=None, force=False):
     build_ass(meta["words"], start, end, hook, credit, ass)
     dur = round(end - start, 3)
     tmp = TRN / f"{name}.render.mp4"
-    # setpts/asetpts: both tracks start at exactly 0 (no black or silent opening)
+    # LIP SYNC: seek PRE seconds early so the picture is decodable (keyframes every ~2s), then cut BOTH
+    # tracks at the same timestamp and shift both by the same constant. Never reset each track to its
+    # own first frame (PTS-STARTPTS): after a seek the first decodable video frame can be up to a
+    # keyframe interval late, which pulled the picture ~1s away from the sound.
     # aresample async + apad + -t: audio covers the whole clip, never shorter than the picture
-    vf = ("[0:v]setpts=PTS-STARTPTS,fps=30,split[a][b];"
+    pre = round(min(3.0, start), 3)
+    vf = (f"[0:v]trim=start={pre},setpts=PTS-{pre}/TB,fps=30:start_time=0,split[a][b];"
           "[a]scale=216:384:force_original_aspect_ratio=increase,crop=216:384,boxblur=6:1,eq=brightness=-0.12,scale=1080:1920[bg];"
           "[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2-60[v];"
           f"[v]ass={ass.name}[vout];"
-          "[0:a:0]asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11,"
-          "aresample=48000,apad[aout]")
+          f"[0:a:0]atrim=start={pre},asetpts=PTS-{pre}/TB,aresample=48000:async=1:first_pts=0,"
+          "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,apad[aout]")
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-fflags", "+discardcorrupt",
-           "-ss", str(start), "-t", str(dur + 0.5), "-i", meta["file"],
+           "-ss", str(round(start - pre, 3)), "-t", str(dur + pre + 0.5), "-i", meta["file"],
            "-filter_complex", vf, "-map", "[vout]", "-map", "[aout]", "-t", str(dur),
            "-c:v", "libx264", "-preset", CFG.get("x264_preset", "superfast"), "-crf", "22", "-pix_fmt", "yuv420p",
            "-r", "30", "-threads", str(THREADS), "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
@@ -467,15 +472,19 @@ def render(rid, start, end, hook, tag=None, force=False):
     t0 = time.time()
     run(cmd, check=True, cwd=str(TRN))
     problems = qc(str(tmp), dur)
+    if not any(p.startswith("FAIL") for p in problems):
+        problems += sync_check(str(tmp), meta["file"], start, dur)   # every clip: sound must match the picture
     fails = [p for p in problems if p.startswith("FAIL")]
-    dest_dir = QCF if fails else OUT
+    day = day or TODAY                                   # re-renders go back to the clip's own date folder
+    dest_dir = (QCF if fails else OUT).parent / day
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"{name}.mp4"
     os.replace(tmp, out)
     said = " ".join(w["w"] for w in meta["words"] if start <= w["s"] < end)
     if not fails:
-        (COPY / f"{name}.txt").write_text(
-            f"{hook}\n\nClip: @{meta.get('name', meta['slug'])} on {plat.title()} ({page})\n\n"
+        (COPY.parent / day).mkdir(parents=True, exist_ok=True)
+        (COPY.parent / day / f"{name}.txt").write_text(
+            ("SPOILER (story scene)\n\n" if spoiler else "") + f"{hook}\n\nClip: @{meta.get('name', meta['slug'])} on {plat.title()} ({page})\n\n"
             f"#gta6 #gtavi #gta6gameplay #{re.sub(r'[^A-Za-z0-9]', '', meta['slug'])}\n\n"
             f"---\nsource: {meta['file']}\nwindow: {start}-{end}s ({dur:.0f}s)\nqc: {'; '.join(problems) or 'clean'}\n"
             f"said: {said}\n", encoding="utf-8")
@@ -520,6 +529,58 @@ def qc(path, dur):
     return p
 
 
+def _lag(ref, x, rate, max_s=3.0):
+    """Seconds x lags behind ref (best normalized cross-correlation), and how confident the match is."""
+    import numpy as np
+    n = min(len(ref), len(x))
+    if n < rate * 4:
+        return 0.0, 0.0
+    ref, x = ref[:n] - ref[:n].mean(), x[:n] - x[:n].mean()
+    best, L = (-1.0, 0), int(max_s * rate)
+    for lag in range(-L, L + 1):
+        a, b = (ref[: n - lag], x[lag:]) if lag >= 0 else (ref[-lag:], x[: n + lag])
+        c = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+        best = max(best, (c, lag))
+    return best[1] / rate, best[0]
+
+
+def sync_check(clip, src, start, dur):
+    """Lip-sync check: line the clip's sound and picture up against the source recording separately.
+    If they need different shifts, sound and picture are out of sync by the difference."""
+    import numpy as np
+    pre = min(10.0, start)
+    ref = ["-ss", str(start - pre), "-i", src, "-ss", str(pre), "-t", str(dur)]   # exact cut, decoded from well before
+
+    def env(args):
+        raw = run(["ffmpeg", "-v", "error", *args, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+                  capture_output=True).stdout
+        a = np.frombuffer(raw, np.int16).astype(np.float32)
+        a = a[: len(a) // 80 * 80].reshape(-1, 80)                                  # 10 ms steps
+        e = np.log(np.sqrt((a ** 2).mean(1)) + 1)
+        return np.diff(e, prepend=e[:1])
+
+    def motion(args, crop=""):
+        raw = run(["ffmpeg", "-v", "error", *args, "-an", "-vf", f"{crop}fps=30,scale=64:36,format=gray",
+                   "-f", "rawvideo", "-"], capture_output=True).stdout
+        f = np.frombuffer(raw, np.uint8)
+        f = f[: len(f) // 2304 * 2304].reshape(-1, 36, 64).astype(np.float32)
+        return np.concatenate([[0.0], np.abs(np.diff(f, axis=0)).mean((1, 2))])
+
+    sw, sh = (int(v) for v in re.findall(r"\d+", run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                                       "-show_entries", "stream=width,height", "-of", "csv=p=0", src],
+                                                      capture_output=True, text=True).stdout)[:2])
+    h = int(round(1080 * sh / sw / 2) * 2)
+    crop = f"crop=1080:{h}:0:{(1920 - h) // 2 - 60},"                               # the gameplay area of the clip
+    a_lag, a_conf = _lag(env(ref), env(["-i", clip]), 100)
+    v_lag, v_conf = _lag(motion(ref), motion(["-i", clip], crop), 30)
+    if a_conf < 0.3 or v_conf < 0.3:
+        return [f"WARN lip sync not measurable (little movement or sound), watch it once"]
+    d = a_lag - v_lag
+    if abs(d) >= 0.1:
+        return [f"FAIL out of sync: sound {'late' if d > 0 else 'early'} by {abs(d):.2f}s"]
+    return [f"WARN sound {'late' if d > 0 else 'early'} by {abs(d):.2f}s"] if abs(d) >= 0.06 else []
+
+
 def batch(plan_path):
     """Render a list of clips from a plan file, a few at a time, and print one table."""
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
@@ -527,7 +588,8 @@ def batch(plan_path):
     print(f"rendering {len(plan)} clips, {n} at a time ...", flush=True)
     def one(c):
         try:
-            return render(c["rid"], float(c["start"]), float(c["end"]), c["hook"], c.get("tag"))
+            return render(c["rid"], float(c["start"]), float(c["end"]), c["hook"], c.get("tag"),
+                          day=c.get("date"), spoiler=bool(c.get("spoiler")), exact=bool(c.get("exact")))
         except SystemExit as e:
             return {"clip": f"{c['rid']}_{c.get('tag', '')}", "ok": False, "qc": [f"FAIL {e}"], "hook": c["hook"], "len": 0, "secs": 0}
         except Exception as e:
