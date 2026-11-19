@@ -48,8 +48,8 @@ Write a plan file into the day's transcripts folder, `01_WORKING/06_transcripts/
 
 ```json
 [
-  {"rid": "xqc_231500", "start": 41.2, "end": 78.0, "hook": "He did NOT expect the cops that fast", "tag": "t1"},
-  {"rid": "lordkebun_231500", "start": 12.0, "end": 49.5, "hook": "First jet ski in Vice City goes wrong", "tag": "t1"}
+  {"rid": "xqc_231500", "start": 41.2, "end": 78.0, "hook": "He did NOT expect the cops that fast", "tag": "t1", "channel": "main", "title": "xqc did not expect the gta 6 cops that fast"},
+  {"rid": "lordkebun_231500", "start": 12.0, "end": 49.5, "hook": "First jet ski in Vice City goes wrong", "tag": "t1", "channel": "channel_2"}
 ]
 ```
 
@@ -61,8 +61,9 @@ python tools/clipit.py batch 01_WORKING/06_transcripts/<date>/plan_<time>.json
 
 Run it in the background. It renders `max_parallel_renders` at a time, QCs every clip and prints one table. For each clip that passes:
 
-- the clip goes to `02_OUTPUTS/01_clips_ready_to_post/<date>/`
-- the post text goes to `02_OUTPUTS/03_post_copy/<date>/` (hook, credit, hashtags, QC result)
+- the clip goes to `02_OUTPUTS/01_clips_ready_to_post/<channel>/` (flat, no date folders)
+- its caption goes beside it as `<clip>.txt`: TITLE, then the CAPTION block to copy (hook, credit, hashtags). `title` in the plan sets the upload title; otherwise the hook is used
+- source, QC result and transcript go to `01_WORKING/06_transcripts/clip_details/<clip>.txt`
 - a row goes in `00_TRACKER/clip_log.csv`
 
 A clip that fails QC goes to `01_WORKING/09_qc_failed/<date>/` and is logged as `qc_failed`. Never move it to outputs. Pick another window instead.
@@ -85,6 +86,12 @@ Also look at one frame per clip (`ffmpeg -ss 5 -i clip.mp4 -frames:v 1 -vf scale
 - Tell the person in a short table: clip, length, hook, verdict ("strong", "ok", "test only"). QC failures in one line.
 - Send the best 1 or 2 clips with SendUserFile if that tool exists.
 - If a visual log page exists (`dashboard_url` in config), add the clips with the `clip-log` skill.
+
+## Creative formats (compilations)
+
+Beyond single clips, make formats: Top 5 countdowns, "Kai vs Speed", themed pieces ("GTA 6 is a life simulator now", "NPCs are way too real"). Build them with `clipit.py compile` into `02_OUTPUTS/01_clips_ready_to_post/<channel>/` (plan `"channel": "main"` etc.; give each compile a unique `name`, e.g. `top5_2026-11-20`, because channel folders have no dates). Every clip and compilation gets a channel (`main`, `channel_2`, `channel_3`, see CLAUDE.md "Three channels"; main gets the most exciting and engaging clips of any type, the rest is mixed evenly across 2 and 3): set it in each plan item's `"channel"`. Pick each moment's seconds from the word timings, 7 to 20s each, 35 to 60s total. Mix creators; a moment can repeat across formats, but not three times in one batch.
+
+Captions: the fast caption model (base.en) mishears fast talkers ("certainly rubber bait" for "five stars when you rob a bank"). Before compiling, re-transcribe the chosen moments with `medium.en` (about 2 s of CPU per second of audio here) and write the words back into the recording's .json.
 
 ## Speed rules
 

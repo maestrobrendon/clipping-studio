@@ -31,3 +31,7 @@ venv/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# live alert runtime files
+01_WORKING/08_notes/live_alert.log
+01_WORKING/08_notes/live_alert_state.json

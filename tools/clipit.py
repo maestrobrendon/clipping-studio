@@ -10,6 +10,11 @@
                                                         make one 9:16 captioned clip + post copy, then QC it
   python tools/clipit.py batch  plan.json               render many clips at once (the normal way), QC each,
                                                         print one table. plan = [{"rid","start","end","hook","tag"}]
+  python tools/clipit.py compile plan.json              join several moments into one ranked video: a Top 5 Short
+                                                        (layout "short", 9:16) or a weekly Top 15 (layout "long", 16:9).
+                                                        Rank number in the corner, a label per moment, each creator
+                                                        credited, YouTube chapters in the post copy. Items in play
+                                                        order: the first is #N, the last is #1.
 
 Every clip is quality-checked (picture and sound both start at 0 and run the full length, no black
 opening, no dead audio). Failures go to 01_WORKING/09_qc_failed/, never to the outputs folder.
@@ -19,8 +24,8 @@ Sources: kick:<slug> (default if no prefix), twitch:<login>, yt:<@handle or url>
 Where files go (never mix working files and outputs):
   recordings  01_WORKING/01_capture_stream_segments/<date>/
   transcripts 01_WORKING/06_transcripts/<date>/   (also the review frames and .ass caption files)
-  clips       02_OUTPUTS/01_clips_ready_to_post/<date>/
-  post copy   02_OUTPUTS/03_post_copy/<date>/
+  clips       02_OUTPUTS/01_clips_ready_to_post/<channel>/  (clip.mp4 + clip.txt caption side by side)
+  clip notes  01_WORKING/06_transcripts/clip_details/  (source, QC, transcript)
   log         00_TRACKER/clip_log.csv
 """
 import argparse, csv, json, os, platform, re, shutil, subprocess, sys, threading, time, urllib.parse, urllib.request
@@ -37,8 +42,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TODAY = datetime.now().strftime("%Y-%m-%d")
 CAP = ROOT / "01_WORKING" / "01_capture_stream_segments" / TODAY
 TRN = ROOT / "01_WORKING" / "06_transcripts" / TODAY
-OUT = ROOT / "02_OUTPUTS" / "01_clips_ready_to_post" / TODAY
-COPY = ROOT / "02_OUTPUTS" / "03_post_copy" / TODAY
+OUT = ROOT / "02_OUTPUTS" / "01_clips_ready_to_post"       # <channel>/<clip>.mp4 + <clip>.txt caption, no date folders
+DETAILS = ROOT / "01_WORKING" / "06_transcripts" / "clip_details"   # source, window, QC and transcript per clip
+CHANNELS = ("main", "channel_2", "channel_3")
 QCF = ROOT / "01_WORKING" / "09_qc_failed" / TODAY
 LOG = ROOT / "00_TRACKER" / "clip_log.csv"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
@@ -60,8 +66,28 @@ os.environ.setdefault("OMP_NUM_THREADS", str(THREADS))
 
 
 def need_dirs():
-    for d in (CAP, TRN, OUT, COPY, LOG.parent):
+    for d in (CAP, TRN, OUT, DETAILS, LOG.parent):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def channel_of(ch):
+    """Which channel folder a clip goes to. Plans say "channel" (old plans used "date")."""
+    ch = (ch or "").replace("\\", "/").strip("/").split("/")[0]    # channel folders are flat: never a date below
+    return ch if ch in CHANNELS else "unsorted"
+
+
+def write_caption(folder, name, title, body, details, spoiler=False):
+    """Caption .txt beside the clip, laid out so anyone can open it and copy-paste. Tech notes go to DETAILS."""
+    bar = "-" * 50
+    lines = [f"CLIP: {name}.mp4", "=" * 50, ""]
+    if spoiler:
+        lines += ["!! SPOILER: story scene. Keep the word SPOILER at the top of the caption.",
+                  "!! No story details in the title or the cover.", ""]
+    lines += ["TITLE", title, "", "CAPTION  (copy everything between the lines)", bar]
+    lines += (["SPOILER (story scene)", ""] if spoiler else []) + list(body) + [bar, ""]
+    (Path(folder) / f"{name}.txt").write_text("\r\n".join(lines), encoding="utf-8-sig")   # opens cleanly in Notepad
+    DETAILS.mkdir(parents=True, exist_ok=True)
+    (DETAILS / f"{name}.txt").write_text(details.rstrip() + "\n", encoding="utf-8")
 
 
 def log_row(**row):
@@ -110,7 +136,8 @@ QUALITY = "720p60,720p,720p30,480p,best"
 
 def streamlink_live(page):
     """True if streamlink sees a live stream at this page (Twitch, YouTube)."""
-    r = run(["streamlink", "--json", page], capture_output=True, text=True, timeout=90)
+    r = run(["streamlink", "--json", page], capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=90)                                  # stream titles are full of emoji
     try:
         return bool(json.loads(r.stdout or "{}").get("streams"))
     except Exception:
@@ -399,25 +426,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     dur = end - start
     ev = [f"Dialogue: 1,{ass_time(0)},{ass_time(dur)},Hook,,0,0,0,,{ass_escape(hook.upper())}",
           f"Dialogue: 1,{ass_time(0)},{ass_time(dur)},Credit,,0,0,0,,{ass_escape(credit)}"]
+    Path(path).write_text(hdr + "\n".join(ev + caption_events(words, start, end)) + "\n", encoding="utf-8")
+
+
+def caption_events(words, start, end):
+    """3-word captions, timed to the words, relative to `start`."""
+    ev = []
     ws = [w for w in words if start <= w["s"] < end and w["w"]]
     for i in range(0, len(ws), 3):
         grp = ws[i:i + 3]
         s = grp[0]["s"] - start
         e = (ws[i + 3]["s"] - start) if i + 3 < len(ws) else grp[-1]["e"] - start + 0.3
-        e = min(e, grp[-1]["e"] - start + 0.6)
+        e = min(e, grp[-1]["e"] - start + 0.6, end - start)
         txt = " ".join(re.sub(r"[^\w'!?.,-]", "", g["w"]) for g in grp).upper()
-        if txt.strip():
+        if txt.strip() and e > s:
             ev.append(f"Dialogue: 0,{ass_time(s)},{ass_time(max(e, s + 0.25))},Cap,,0,0,0,,"
                       f"{{\\fscx108\\fscy108\\t(0,90,\\fscx100\\fscy100)}}{ass_escape(txt)}")
-    Path(path).write_text(hdr + "\n".join(ev) + "\n", encoding="utf-8")
+    return ev
 
 
 def covered(spans, s, e):
     return any(a <= s + 0.5 and b >= e - 0.5 for a, b in spans)
 
 
-def render(rid, start, end, hook, tag=None, force=False, day=None, spoiler=False, exact=False):
-    """Render one clip, then QC it. A clip that fails QC goes to 01_WORKING/09_qc_failed, never to outputs."""
+def prepare(rid, start, end, force=False, exact=False):
+    """Load a recording's analysis, make sure every second of start-end has captions, snap to word edges.
+    Returns (meta, start, end)."""
     mpath = TRN / f"{rid}.json"
     if not mpath.exists():                       # recorded before midnight: look in earlier days
         found = sorted(TRN.parent.glob(f"*/{rid}.json"))
@@ -443,11 +477,21 @@ def render(rid, start, end, hook, tag=None, force=False, day=None, spoiler=False
                      capture_output=True, text=True).stdout.strip() or end)
     if not exact:                                                    # exact: times already final (re-render)
         start, end = snap(start, end, meta["words"], fdur)           # never cut someone off mid-word
+    return meta, start, end
+
+
+def credit_line(meta):
+    page = meta.get("page") or f"https://kick.com/{meta['slug']}"
+    return page, f"Clip: {page.replace('https://', '').replace('www.', '')}"
+
+
+def render(rid, start, end, hook, tag=None, force=False, day=None, spoiler=False, exact=False, title=None):
+    """Render one clip, then QC it. A clip that fails QC goes to 01_WORKING/09_qc_failed, never to outputs."""
+    meta, start, end = prepare(rid, start, end, force, exact)
     name = f"{rid}_{tag or int(start)}"
     ass = TRN / f"{name}.ass"
     plat = meta.get("platform", "kick")
-    page = meta.get("page") or f"https://kick.com/{meta['slug']}"
-    credit = f"Clip: {page.replace('https://', '').replace('www.', '')}"
+    page, credit = credit_line(meta)
     build_ass(meta["words"], start, end, hook, credit, ass)
     dur = round(end - start, 3)
     tmp = TRN / f"{name}.render.mp4"
@@ -475,19 +519,19 @@ def render(rid, start, end, hook, tag=None, force=False, day=None, spoiler=False
     if not any(p.startswith("FAIL") for p in problems):
         problems += sync_check(str(tmp), meta["file"], start, dur)   # every clip: sound must match the picture
     fails = [p for p in problems if p.startswith("FAIL")]
-    day = day or TODAY                                   # re-renders go back to the clip's own date folder
-    dest_dir = (QCF if fails else OUT).parent / day
+    dest_dir = QCF if fails else OUT / channel_of(day)     # one flat folder per channel
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"{name}.mp4"
     os.replace(tmp, out)
     said = " ".join(w["w"] for w in meta["words"] if start <= w["s"] < end)
     if not fails:
-        (COPY.parent / day).mkdir(parents=True, exist_ok=True)
-        (COPY.parent / day / f"{name}.txt").write_text(
-            ("SPOILER (story scene)\n\n" if spoiler else "") + f"{hook}\n\nClip: @{meta.get('name', meta['slug'])} on {plat.title()} ({page})\n\n"
-            f"#gta6 #gtavi #gta6gameplay #{re.sub(r'[^A-Za-z0-9]', '', meta['slug'])}\n\n"
-            f"---\nsource: {meta['file']}\nwindow: {start}-{end}s ({dur:.0f}s)\nqc: {'; '.join(problems) or 'clean'}\n"
-            f"said: {said}\n", encoding="utf-8")
+        who = meta.get("name", meta["slug"])
+        write_caption(dest_dir, name, title or hook,
+                      [hook, "", f"Clip: @{who} on {plat.title()} ({page})", f"Go follow {who} on {plat.title()}.", "",
+                       "Fan channel. Not affiliated with Rockstar Games.", "",
+                       f"#gta6 #gtavi #gta6gameplay #{re.sub(r'[^A-Za-z0-9]', '', meta['slug'])}"],
+                      f"source: {meta['file']}\nwindow: {start}-{end}s ({dur:.0f}s)\n"
+                      f"qc: {'; '.join(problems) or 'clean'}\nsaid: {said}", spoiler)
     log_row(kind="clip", status="qc_failed" if fails else "ready", creator=meta.get("name", meta["slug"]),
             platform=plat, title=hook, file=str(out.relative_to(ROOT)),
             note=f"{start}-{end}s of {rid}; qc: {'; '.join(problems) or 'clean'}")
@@ -544,38 +588,68 @@ def _lag(ref, x, rate, max_s=3.0):
     return best[1] / rate, best[0]
 
 
-def sync_check(clip, src, start, dur):
+def sync_check(clip, src, start, dur, layout="short", clip_off=0.0):
     """Lip-sync check: line the clip's sound and picture up against the source recording separately.
-    If they need different shifts, sound and picture are out of sync by the difference."""
+    If they need different shifts, sound and picture are out of sync by the difference.
+    clip_off: where this piece starts inside `clip` (for a compilation, each segment is checked in place)."""
+    """Method (2026-11-19): picture = for sample frames of the clip, find the source frame they came from by
+    pixel difference; sound = cross-correlate the raw waveform. Accurate to ~1 frame and ~1 ms. (The older
+    movement/loudness correlation gave false fails of 0.1-0.2s on short compilation segments.)"""
     import numpy as np
-    pre = min(10.0, start)
-    ref = ["-ss", str(start - pre), "-i", src, "-ss", str(pre), "-t", str(dur)]   # exact cut, decoded from well before
+    M = 1.5                                                     # how far either track may have moved, seconds
+    s0 = max(0.0, start - M)
+    pre = min(8.0, s0)
+    src_a = ["-ss", str(round(s0 - pre, 3)), "-i", src, "-ss", str(pre), "-t", str(dur + 2 * M)]   # exact, decoded from before
+    cl = (["-ss", str(clip_off)] if clip_off else []) + ["-i", clip, "-t", str(dur)]
+    W, H = 96, 54
 
-    def env(args):
-        raw = run(["ffmpeg", "-v", "error", *args, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
-                  capture_output=True).stdout
-        a = np.frombuffer(raw, np.int16).astype(np.float32)
-        a = a[: len(a) // 80 * 80].reshape(-1, 80)                                  # 10 ms steps
-        e = np.log(np.sqrt((a ** 2).mean(1)) + 1)
-        return np.diff(e, prepend=e[:1])
-
-    def motion(args, crop=""):
-        raw = run(["ffmpeg", "-v", "error", *args, "-an", "-vf", f"{crop}fps=30,scale=64:36,format=gray",
+    def frames(args, vf, fps):
+        raw = run(["ffmpeg", "-v", "error", *args, "-an", "-vf", f"{vf}fps={fps},scale={W}:{H},format=gray",
                    "-f", "rawvideo", "-"], capture_output=True).stdout
         f = np.frombuffer(raw, np.uint8)
-        f = f[: len(f) // 2304 * 2304].reshape(-1, 36, 64).astype(np.float32)
-        return np.concatenate([[0.0], np.abs(np.diff(f, axis=0)).mean((1, 2))])
+        return f[: len(f) // (W * H) * (W * H)].reshape(-1, H, W).astype(np.float32)
+
+    def wave(args):
+        raw = run(["ffmpeg", "-v", "error", *args, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+                  capture_output=True).stdout
+        return np.frombuffer(raw, np.int16).astype(np.float64)
 
     sw, sh = (int(v) for v in re.findall(r"\d+", run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                                                        "-show_entries", "stream=width,height", "-of", "csv=p=0", src],
                                                       capture_output=True, text=True).stdout)[:2])
-    h = int(round(1080 * sh / sw / 2) * 2)
-    crop = f"crop=1080:{h}:0:{(1920 - h) // 2 - 60},"                               # the gameplay area of the clip
-    a_lag, a_conf = _lag(env(ref), env(["-i", clip]), 100)
-    v_lag, v_conf = _lag(motion(ref), motion(["-i", clip], crop), 30)
-    if a_conf < 0.3 or v_conf < 0.3:
+    if layout == "long":                                                          # 16:9, gameplay fills the frame
+        w, h = (1920, int(round(1920 * sh / sw / 2) * 2)) if sw / sh >= 16 / 9 else (int(round(1080 * sw / sh / 2) * 2), 1080)
+        crop = f"crop={w}:{h}:{(1920 - w) // 2}:{(1080 - h) // 2},"
+    else:
+        h = int(round(1080 * sh / sw / 2) * 2)
+        crop = f"crop=1080:{h}:0:{(1920 - h) // 2 - 60},"                           # the gameplay area of the clip
+    # Measure picture movement only in the middle of the gameplay, in both files: the rank number (top
+    # left), the moment label (bottom) and captions are animated overlays the source doesn't have, and
+    # their pops and fades fooled the match by a few frames.
+    inner = "crop=trunc(iw*0.7/2)*2:trunc(ih*0.5/2)*2:trunc(iw*0.25/2)*2:trunc(ih*0.22/2)*2,"
+    sf, cf = frames(src_a, inner, 60), frames(cl, crop + inner, 30)
+    offs = []
+    for k in range(3, len(cf) - 3, max(1, len(cf) // 20)):
+        diff = ((sf - cf[k]) ** 2).mean((1, 2))
+        offs.append((s0 + int(diff.argmin()) / 60) - (start + k / 30))   # + = clip shows a later source moment
+    sw_, cw = wave(src_a), wave(cl)
+    a_conf, v_lag, a_lag = 0.0, 0.0, 0.0
+    if len(cw) > 8000 and len(sw_) > len(cw):
+        n = len(cw)
+        N = 1 << int(np.ceil(np.log2(len(sw_) + n)))
+        corr = np.fft.irfft(np.fft.rfft(sw_, N) * np.conj(np.fft.rfft(cw, N)), N)[: len(sw_) - n + 1]
+        e = np.concatenate([[0.0], np.cumsum(sw_ ** 2)])
+        norm = np.sqrt(e[n:] - e[:-n]) * (np.linalg.norm(cw) + 1e-9) + 1e-9
+        c = corr / norm
+        j = int(c.argmax())
+        a_conf, a_lag = float(c[j]), (s0 + j / 8000) - start
+    # still frames (a room, a menu) match anywhere; use the frames that agree, if at least half of them do
+    med = float(np.median(offs)) if offs else 0.0
+    agree = [o for o in offs if abs(o - med) <= 0.05]
+    if len(agree) < max(3, len(offs) / 2) or a_conf < 0.5:
         return [f"WARN lip sync not measurable (little movement or sound), watch it once"]
-    d = a_lag - v_lag
+    v_lag = float(np.median(agree))
+    d = v_lag - a_lag                         # + = sound shows an earlier moment than the picture = sound late
     if abs(d) >= 0.1:
         return [f"FAIL out of sync: sound {'late' if d > 0 else 'early'} by {abs(d):.2f}s"]
     return [f"WARN sound {'late' if d > 0 else 'early'} by {abs(d):.2f}s"] if abs(d) >= 0.06 else []
@@ -589,7 +663,8 @@ def batch(plan_path):
     def one(c):
         try:
             return render(c["rid"], float(c["start"]), float(c["end"]), c["hook"], c.get("tag"),
-                          day=c.get("date"), spoiler=bool(c.get("spoiler")), exact=bool(c.get("exact")))
+                          day=c.get("channel") or c.get("date"), spoiler=bool(c.get("spoiler")),
+                          exact=bool(c.get("exact")), title=c.get("title"))
         except SystemExit as e:
             return {"clip": f"{c['rid']}_{c.get('tag', '')}", "ok": False, "qc": [f"FAIL {e}"], "hook": c["hook"], "len": 0, "secs": 0}
         except Exception as e:
@@ -606,6 +681,212 @@ def batch(plan_path):
             print(f"{'':<42}{q}")
     (TRN / f"batch_{datetime.now().strftime('%H%M%S')}.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
     return res
+
+
+# ---------- compile: ranked Shorts and long videos from several moments ----------
+FPS = 30
+LABEL_SECS = 3.5
+
+
+def src_size(path):
+    out = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+               "-of", "csv=p=0", path], capture_output=True, text=True).stdout
+    return tuple(int(v) for v in re.findall(r"\d+", out)[:2])
+
+
+def seg_ass(words, start, end, path, layout, title, rank, label, credit, video_top, video_bottom):
+    """Captions + overlays for one segment of a compilation: the rank number stays in the corner the whole
+    segment, the label (why it's ranked there) shows for the first few seconds, credit is this creator's."""
+    big, small = fonts()
+    if layout == "long":
+        res = (1920, 1080)
+        styles = [
+            f"Style: Rank,{big},150,&H0000E5FF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,9,3,7,60,60,30,1",
+            f"Style: Label,{big},62,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,3,14,0,7,75,600,215,1",
+            f"Style: Cap,{big},80,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,6,2,2,80,80,70,1",
+            f"Style: Credit,{small},32,&H00E6E6E6,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,3,0,9,40,40,30,1"]
+    else:
+        res = (1080, 1920)
+        styles = [
+            f"Style: Hook,{big},84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,3,18,0,8,70,70,250,1",
+            f"Style: Rank,{big},150,&H0000E5FF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,9,3,7,40,40,{video_top + 10},1",
+            f"Style: Label,{big},58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,3,12,0,2,70,70,{1920 - video_bottom + 25},1",
+            f"Style: Cap,{big},92,&H00FFFFFF,&H0000E5FF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,7,2,2,60,60,560,1",
+            f"Style: Credit,{small},34,&H00E6E6E6,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,3,0,2,60,60,150,1"]
+    hdr = ("[Script Info]\nScriptType: v4.00+\nPlayResX: %d\nPlayResY: %d\nWrapStyle: 0\n\n[V4+ Styles]\n"
+           "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+           "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+           "MarginR, MarginV, Encoding\n%s\n\n[Events]\n"
+           "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n") % (*res, "\n".join(styles))
+    dur = end - start
+    T0, T1 = ass_time(0), ass_time(dur)
+    ev = [f"Dialogue: 1,{T0},{T1},Credit,,0,0,0,,{ass_escape(credit)}"]
+    if layout != "long" and title:
+        ev.append(f"Dialogue: 1,{T0},{T1},Hook,,0,0,0,,{ass_escape(title.upper())}")
+    if rank:
+        ev.append(f"Dialogue: 2,{T0},{T1},Rank,,0,0,0,,{{\\fscx150\\fscy150\\t(0,220,\\fscx100\\fscy100)}}{ass_escape(rank)}")
+    if label:
+        ev.append(f"Dialogue: 2,{T0},{ass_time(min(LABEL_SECS, dur))},Label,,0,0,0,,{{\\fad(120,250)}}{ass_escape(label.upper())}")
+    Path(path).write_text(hdr + "\n".join(ev + caption_events(words, start, end)) + "\n", encoding="utf-8")
+
+
+def level_segment(path, target=-14.0):
+    """Every moment in a compilation plays at the same volume. loudnorm alone doesn't settle on 7-15s pieces
+    (measured spreads of up to 4.4 LU between moments), so measure the finished piece and correct it exactly,
+    with a limiter so a boost can't clip. Audio is PCM here, so this costs no quality."""
+    log = run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "ebur128", "-f", "null", "-"],
+              capture_output=True, text=True, errors="replace").stderr
+    m = re.findall(r"I:\s+(-?[\d.]+) LUFS", log)
+    if not m or float(m[-1]) < -60:                              # silent piece: leave it alone
+        return
+    gain = max(-8.0, min(8.0, target - float(m[-1])))
+    if abs(gain) < 0.5:
+        return
+    tmp = Path(path).with_suffix(".lvl.mkv")
+    run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(path), "-c:v", "copy",
+         "-af", f"volume={gain:.2f}dB,alimiter=limit=0.79:attack=5:release=50:level=disabled:latency=1",  # -2 dBFS (AAC adds ~0.5); latency=1: no delay
+         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(tmp)], check=True)
+    os.replace(tmp, path)
+
+
+def compile_segment(seg, layout, title, work):
+    """Render one segment to an intermediate .mkv (H.264 + PCM, frame-exact length) so segments join
+    without the sound drifting from the picture."""
+    meta, s, e = prepare(seg["rid"], float(seg["start"]), float(seg["end"]), exact=bool(seg.get("exact")))
+    if seg.get("secs"):                                          # tease: just the first few seconds
+        e = min(e, s + float(seg["secs"]))
+    s = round(s, 3)
+    dur = round((e - s) * FPS) / FPS                             # whole frames: 1600 samples each at 48 kHz
+    sw, sh = src_size(meta["file"])
+    h = int(round(1080 * sh / sw / 2) * 2)
+    top = (1920 - h) // 2 - 60
+    page, credit = credit_line(meta)
+    ass = work / f"seg{seg['i']:02d}.ass"
+    seg_ass(meta["words"], s, s + dur, ass, layout, title, seg.get("rank_text"), seg.get("label"), credit, top, top + h)
+    pre = round(min(3.0, s), 3)
+    trim = f"[0:v]trim=start={pre},setpts=PTS-{pre}/TB,fps={FPS}:start_time=0"
+    if layout == "long":
+        vf = (f"{trim},scale=1920:1080:force_original_aspect_ratio=decrease,"
+              "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v];")
+    else:
+        vf = (f"{trim},split[a][b];"
+              "[a]scale=216:384:force_original_aspect_ratio=increase,crop=216:384,boxblur=6:1,eq=brightness=-0.12,scale=1080:1920[bg];"
+              "[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2-60,setsar=1[v];")
+    vf += (f"[v]ass={ass.name}[vout];"
+           f"[0:a:0]atrim=start={pre},asetpts=PTS-{pre}/TB,aresample=48000:async=1:first_pts=0,"
+           "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,"
+           f"afade=t=in:d=0.04,afade=t=out:st={max(0, dur - 0.04):.3f}:d=0.04,"   # no click at the joins
+           "apad[aout]")
+    out = work / f"seg{seg['i']:02d}.mkv"
+    run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-fflags", "+discardcorrupt",
+         "-ss", str(round(s - pre, 3)), "-t", str(dur + pre + 0.5), "-i", meta["file"],
+         "-filter_complex", vf, "-map", "[vout]", "-map", "[aout]", "-t", str(dur),
+         "-c:v", "libx264", "-preset", CFG.get("x264_preset", "superfast"), "-crf", "21", "-pix_fmt", "yuv420p",
+         "-r", str(FPS), "-g", str(FPS * 2), "-threads", str(THREADS), "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+         str(out)], check=True, cwd=str(work))
+    level_segment(out)
+    return {**seg, "file": str(out), "src": meta["file"], "s": s, "dur": dur, "page": page,
+            "creator": meta.get("name", meta["slug"]), "platform": meta.get("platform", "kick")}
+
+
+def mmss(x):
+    x = int(x)
+    return f"{x // 3600}:{x % 3600 // 60:02d}:{x % 60:02d}" if x >= 3600 else f"{x // 60}:{x % 60:02d}"
+
+
+def compile_plan(plan_path):
+    """Join several moments into one ranked video (Top 5 Short, weekly Top 15, wholesome countdown...).
+    plan = {"title", "layout": "short"|"long", "ranked": true, "tease": 0, "spoiler": false, "name",
+            "items": [{"rid","start","end","label"}]}   items in PLAY order: with ranked, the first is #N, the last is #1.
+    Each moment keeps its own creator credit; the joined file is QC'd and every segment is lip-sync checked in place."""
+    plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    title = plan["title"]
+    layout = plan.get("layout", "short")
+    if layout not in ("short", "long"):
+        raise SystemExit('layout must be "short" (9:16) or "long" (16:9)')
+    items = plan["items"]
+    if len(items) < 2:
+        raise SystemExit("a compilation needs at least 2 items")
+    ranked = plan.get("ranked", True)
+    name = "compile_" + (plan.get("name") or re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40])
+    day = channel_of(plan.get("channel") or plan.get("date"))
+    work = TRN / name
+    work.mkdir(parents=True, exist_ok=True)
+
+    segs = []
+    tease = float(plan.get("tease") or 0)
+    if tease and ranked:                                          # open on a few seconds of #1, then count down
+        segs.append({**items[-1], "secs": tease, "rank_text": None, "label": plan.get("tease_label", "wait for #1"), "tease": True})
+    for k, it in enumerate(items):
+        segs.append({**it, "rank_text": f"#{len(items) - k}" if ranked else None, "rank": len(items) - k if ranked else k + 1})
+    for i, sg in enumerate(segs):
+        sg["i"] = i
+
+    n = max(1, int(CFG.get("max_parallel_renders", 2)))
+    print(f"compiling {len(segs)} segments ({layout}), {n} at a time ...", flush=True)
+    t0 = time.time()
+    with ThreadPoolExecutor(n) as ex:
+        done = list(ex.map(lambda sg: compile_segment(sg, layout, title, work), segs))
+
+    lst = work / "segments.txt"
+    lst.write_text("".join(f"file '{Path(d['file']).name}'\n" for d in done), encoding="utf-8")
+    tmp = work / f"{name}.render.mp4"
+    run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst.name,
+         "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", tmp.name],
+        check=True, cwd=str(work))
+
+    total = round(sum(d["dur"] for d in done), 3)
+    problems = qc(str(tmp), total)
+    if layout == "short":
+        if total > 180:
+            problems.append(f"FAIL {total:.0f}s is over the 3 min Shorts limit")
+        elif total > 60:
+            problems.append(f"WARN {total:.0f}s; ranked Shorts work best at 45 to 60s")
+    off = 0.0
+    if not any(p.startswith("FAIL") for p in problems):
+        for d in done:                                           # lip sync of every segment, measured in the joined file
+            who = "tease" if d.get("tease") else (d["rank_text"] or f"part {d['rank']}")
+            problems += [f"{p.split(' ', 1)[0]} {who} {d['creator']}: {p.split(' ', 1)[1]}"
+                         for p in sync_check(str(tmp), d["src"], d["s"], d["dur"], layout, off)]
+            off += d["dur"]
+    fails = [p for p in problems if p.startswith("FAIL")]
+    dest = QCF if fails else OUT / day
+    dest.mkdir(parents=True, exist_ok=True)
+    out = dest / f"{name}.mp4"
+    os.replace(tmp, out)
+
+    creators = list(dict.fromkeys(d["creator"] for d in done))
+    if not fails:
+        lines = [title, ""]
+        if layout == "long":                                     # YouTube chapters: first at 0:00, each 10s+
+            t, chapters = 0.0, []
+            for d in done:
+                if not d.get("tease"):
+                    lab = f"{d['rank_text'] + ' ' if d['rank_text'] else ''}{d.get('label') or d['creator']} ({d['creator']})"
+                    chapters.append([t, lab])
+                t += d["dur"]
+            chapters[0][0] = 0
+            lines += [f"{mmss(c[0])} {c[1]}" for c in chapters] + [""]
+        lines += ["Clips:"] + [f"{d['rank_text'] or ''} @{d['creator']} on {d['platform'].title()} ({d['page']})".strip()
+                               for d in done if not d.get("tease")]
+        lines += ["", "Fan channel. Not affiliated with Rockstar Games.", "",
+                  "#gta6 #gtavi #gta6gameplay " + " ".join("#" + re.sub(r"[^A-Za-z0-9]", "", c) for c in creators)
+                  + (" #shorts" if layout == "short" else "")]
+        det = [f"length: {total:.0f}s  layout: {layout}", f"qc: {'; '.join(problems) or 'clean'}"]
+        det += [f"segment {d['i']}: {Path(d['src']).stem} {d['s']}-{round(d['s'] + d['dur'], 2)}s" for d in done]
+        write_caption(dest, name, plan.get("yt_title") or title, lines, "\n".join(det), bool(plan.get("spoiler")))
+    for d in done:                                               # intermediates are big; the .ass files stay for review
+        Path(d["file"]).unlink(missing_ok=True)
+    log_row(kind="compile", status="qc_failed" if fails else "ready", creator=", ".join(creators), platform="mixed",
+            title=title, file=str(out.relative_to(ROOT)), note=f"{len(items)} moments, {total:.0f}s; qc: {'; '.join(problems) or 'clean'}")
+
+    print(f"\n{'ready' if not fails else 'QC FAILED'}: {out}  ({total:.0f}s, {layout}, {round(time.time() - t0)}s to make)")
+    print(f"{'seg':<4} {'rank':<5} {'len':>4}  creator / label")
+    for d in done:
+        print(f"{d['i']:<4} {('tease' if d.get('tease') else d['rank_text'] or '-'):<5} {d['dur']:>4.0f}  {d['creator']} / {d.get('label') or ''}")
+    for p in problems:
+        print(f"  {p}")
+    return {"file": str(out), "ok": not fails, "qc": problems, "len": total}
 
 
 # ---------- doctor ----------
@@ -665,6 +946,8 @@ def main():
     r.add_argument("--end", type=float, required=True); r.add_argument("--hook", required=True); r.add_argument("--tag")
     r.add_argument("--force", action="store_true", help="render even across a gap in the recording")
     b = sub.add_parser("batch"); b.add_argument("plan", help='JSON list of {"rid","start","end","hook","tag"}')
+    c = sub.add_parser("compile", help="join several moments into one ranked Short or long video")
+    c.add_argument("plan", help='JSON {"title","layout":"short|long","ranked":true,"tease":0,"items":[{"rid","start","end","label"}]}')
     a = ap.parse_args()
 
     if a.cmd == "doctor":
@@ -709,6 +992,8 @@ def main():
         report(recs)
     elif a.cmd == "batch":
         batch(a.plan)
+    elif a.cmd == "compile":
+        compile_plan(a.plan)
     else:
         r = render(a.rid, a.start, a.end, a.hook, a.tag, a.force)
         print(f"{'ready' if r['ok'] else 'QC FAILED'}: {r['file']} ({r['len']:.0f}s clip, {r['secs']}s to render)")

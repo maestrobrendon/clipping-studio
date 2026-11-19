@@ -22,7 +22,7 @@ Write 3 options in your head, keep the most specific one.
 
 ## The caption file
 
-`clipit.py render` writes a draft in `02_OUTPUTS/03_post_copy/<date>/<clip>.txt`. Edit it to this shape:
+`clipit.py render` writes the caption beside the clip, `02_OUTPUTS/01_clips_ready_to_post/<channel>/<clip>.txt`, with a TITLE and a CAPTION block between two lines of dashes. Keep that layout (other people open these files) and edit the CAPTION block to this shape:
 
 ```
 <hook, or a slightly longer version of it>
