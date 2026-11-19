@@ -11,6 +11,8 @@ Claude does the work. This repo gives it the tools, the rules and the context.
 3. **Run setup.** In Claude, say **"set up the studio"**, or run it yourself:
    - Windows: `powershell -ExecutionPolicy Bypass -File setup/setup.ps1`
    - macOS / Linux: `bash setup/setup.sh`
+
+   Setup first asks which drive or folder the studio should live on and creates a dedicated **`Clipping Studio`** folder there (your fork is cloned into it). Recordings are big, so pick the drive with the most space. If it moved, open the new folder in Claude Code.
 4. **Make clips.** Say **"clip who's live"** or **"go clip xQc and Kai Cenat"**.
 
 Finished clips land in `02_OUTPUTS/01_clips_ready_to_post/`, with the caption text in `02_OUTPUTS/03_post_copy/`. You post them yourself.
@@ -24,6 +26,7 @@ Finished clips land in `02_OUTPUTS/01_clips_ready_to_post/`, with the caption te
 | faster-whisper | captions, runs on your own computer | yes |
 | streamlink | records every stream (Kick, Twitch, YouTube) without dropping pieces | yes |
 | yt-dlp | downloads finished clips from other creators | yes |
+| ArtCraft suite: FilmCraft, EffectCraft, SoundCraft, PhotoCraft | edit projects, hook/title graphics, audio clean-up, thumbnails; Claude drives them through MCP | Windows: yes (winget), and connected to Claude Code |
 | A Claude account | the assistant | no, sign in yourself |
 
 No API keys, no paid services. Captions run locally.
